@@ -1,7 +1,13 @@
-use std::fmt::Display;
+use std::{
+    fmt::Display,
+    io::{self, Read},
+};
 
 use combi::{
-    defs::{eof, pretty_print_error, PResult, PState, Parser, Reason, Branching, Repeating, Sequential},
+    defs::{
+        eof, pretty_print_error, Branching, PResult, PState, Parser, Reason, Repeating, Sequential,
+        SourceLoc,
+    },
     parsers::char::*,
 };
 
@@ -335,7 +341,10 @@ fn parser_from_set<'a>(set: CharSet) -> impl Parser<'a, &'a str, char> {
             }
             Err((
                 input.location,
-                vec![Reason::Unexpected(c.to_string()) ,Reason::Expected(set_items_name(set.clone()))],
+                vec![
+                    Reason::Unexpected(c.to_string()),
+                    Reason::Expected(set_items_name(set.clone())),
+                ],
             ))
         }
     }
@@ -430,20 +439,72 @@ fn regex(pattern: &str) -> impl Parser<'_, &str, String> {
     }
 }
 
-fn main() {
-    regex("reg(ex|ular\\sexpressions?)")
-        .exhaustive()
-        .test_parse("regular expression");
-    regex("reg(ex|ular\\sexpressions?)")
-        .exhaustive()
-        .test_parse("regular expressions");
-    regex("reg(ex|ular\\sexpressions?)")
-        .exhaustive()
-        .test_parse("regex");
-    regex("[a-zA-Z0-9._%-]+@[a-zA-Z0-9-]+\\.[a-zA-Z]{2,4}")
-        .exhaustive()
-        .test_parse("test@mail.com");
-    regex("[a-zA-Z0-9._%-]+@[a-zA-Z0-9-]+\\.[a-zA-Z]{2,4}")
-        .exhaustive()
-        .test_parse("test_mail_2@mail.com");
+fn regex_matches(file: &str, pattern: &str) {
+    let regex_parser = regex(pattern);
+    for line in file.lines() {
+        let mut matches = Vec::new();
+        let mut i = 0;
+        while i < line.len() {
+            if let Ok((s, _)) = regex_parser.parse(PState {
+                input: &line[i..],
+                location: SourceLoc {
+                    col: i,
+                    line: 1,
+                    file: std::path::Path::new(pattern),
+                },
+            }) {
+                matches.push((i, i + s.len()));
+                i += s.len();
+            } else {
+                i += 1;
+            }
+        }
+
+        if !matches.is_empty() {
+            let mut i = 0;
+            for (start, end) in matches {
+                print!("{}", &line[i..start]);
+                print!("\x1b[32m{}\x1b[0m", &line[start..end]);
+                i = end;
+            }
+            print!("{}", &line[i..]);
+            println!();
+        }
+    }
+}
+
+fn main() -> std::io::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    if atty::is(atty::Stream::Stdin) {
+        let file_path = args.get(1).expect(
+            "
+        Expected file as first argument
+        usage:
+            cargo run --example regex <FILE> <PATTERN>
+        ",
+        );
+        let file = std::fs::read_to_string(file_path)?;
+        let regex_pattern = args.get(2).unwrap_or_else(|| {
+            panic!(
+                "
+        Expected regex pattern as second argument
+        usage:
+            cargo run --example regex {file_path} <PATTERN>
+        "
+            )
+        });
+        regex_matches(&file, regex_pattern)
+    } else {
+        let mut file = String::new();
+        let regex_pattern = args.get(1).expect(
+            "
+        Expected regex pattern as first argument
+        usage:
+            cargo run --example regex <PATTERN>
+        ",
+        );
+        let _ = io::stdin().read_to_string(&mut file)?;
+        regex_matches(&file, regex_pattern)
+    }
+    Ok(())
 }

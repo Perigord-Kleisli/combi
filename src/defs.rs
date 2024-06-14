@@ -83,19 +83,18 @@ where
     S: Stream + Copy,
 {
     /// A direct implementation intended to be ran by other parsers.
-    /// If intended to be ran directly by the user, instead use `parse`
+    /// If intended to be ran directly by the user, instead use `run_parse`
     fn parse(&self, input: PState<'a, S>) -> PResult<'a, S, T>;
 
-    /// A wrapper around `parse`
-    /// `parser.run_parser(file, input)` runs the parser over `input`. `file` is used only in error messages
+    /// A wrapper around `parse` so that you can pass the stream type directly
     #[inline]
-    fn run_parser(&self, file: &'a str, input: S) -> PResult<'a, S, T> {
+    fn run_parser(&self, file_name: &'a str, input: S) -> PResult<'a, S, T> {
         self.parse(PState {
             input,
             location: SourceLoc {
                 col: 1,
                 line: 1,
-                file: Path::new(file),
+                file: Path::new(file_name),
             },
         })
     }
