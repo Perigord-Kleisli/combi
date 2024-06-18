@@ -20,7 +20,7 @@
   in {
     devShells.${system}.default = pkgs.mkShell {
       packages = with pkgs; [
-        (fenix.packages.${system}.complete.withComponents [
+        (fenix.packages.${system}.stable.withComponents [
           "cargo"
           "clippy"
           "rust-src"
