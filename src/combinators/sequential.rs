@@ -1,69 +1,85 @@
-use crate::defs::Parser;
-use crate::defs::Stream;
+use crate::parser::{pok, Parser};
+use crate::stream::Stream;
 
-pub trait Sequential<'a, S, T>: Parser<'a, S, T>
+pub trait Sequential<'input, S, T>: Parser<'input, S, T>
 where
-    S: Stream + Copy,
+    S: Stream,
 {
-    /// Sequences 2 parsers and stores their results into a tuple
     #[inline]
-    fn and_then<P, B>(&self, next: P) -> impl Parser<'a, S, (T, B)>
+    /// Sequentially parses 2 parsers and applies a function over their result
+    fn seq<F, P, U, V>(&self, p: P, f: F) -> impl Parser<'input, S, V>
     where
-        P: Parser<'a, S, B>,
+        F: Fn(T, U) -> V,
+        P: Parser<'input, S, U>,
     {
         move |input| {
             let (x1, input) = self.parse(input)?;
-            let (x2, input) = next.parse(input)?;
-            Ok(((x1, x2), input))
+            if input.has_consumed() {
+                let (x2, input) = p.set_consuming().parse(input)?;
+                pok(f(x1, x2), input)
+            } else {
+                let (x2, input) = p.parse(input)?;
+                pok(f(x1, x2), input)
+            }
         }
     }
 
-    /// Parses 2 parsers and applies a function over their result
     #[inline]
-    fn seq<F, P, B, C>(&self, p: P, f: F) -> impl Parser<'a, S, C>
+    /// a version of of `seq_r` that takes a reference of a parser, to ease certain type-checker issues
+    fn seq_ref_r<P, U>(&self, p: &P) -> impl Parser<'input, S, U>
     where
-        F: Fn(T, B) -> C,
-        P: Parser<'a, S, B>,
-    {
-        move |input| {
-            let (a, input) = self.parse(input)?;
-            let (b, input) = p.parse(input)?;
-            Ok((f(a,b), input))
-        }
-    }
-
-    /// ignores the output of `self` in `self.ignore_left(p)`
-    /// `self` still consumes input
-    #[inline]
-    fn ignore_left<P, U>(&self, p: &P) -> impl Parser<'a, S, U>
-    where
-        P: Parser<'a, S, U>,
+        P: Parser<'input, S, U> + ?Sized,
     {
         move |input| {
             let (_, input) = self.parse(input)?;
-            p.parse(input)
+            if input.has_consumed() {
+                let (x2, input) = p.set_consuming().parse(input)?;
+                pok(x2, input)
+            } else {
+                let (x2, input) = p.parse(input)?;
+                pok(x2, input)
+            }
         }
     }
 
-    /// ignores the output of `p2` in `self.ignore_left(p)`
-    /// `p` still consumes input
     #[inline]
-    fn ignore_right<P, U>(&self, p: P) -> impl Parser<'a, S, T>
+    /// ignores result from `self` and takes result from `p`
+    fn seq_r<P, U>(&self, p: P) -> impl Parser<'input, S, U>
     where
-        P: Parser<'a, S, U>,
+        P: Parser<'input, S, U>,
     {
         move |input| {
-            let (x, input) = self.parse(input)?;
-            let (_, input) = p.parse(input)?;
-            Ok((x, input))
+            let (_, input) = self.parse(input)?;
+            if input.has_consumed() {
+                let (x2, input) = p.set_consuming().parse(input)?;
+                pok(x2, input)
+            } else {
+                let (x2, input) = p.parse(input)?;
+                pok(x2, input)
+            }
         }
     }
 
+    #[inline]
+    fn seq_l<P, U>(&self, p: P) -> impl Parser<'input, S, T>
+    where
+        P: Parser<'input, S, U>,
+    {
+        move |input| {
+            let (x1, input) = self.parse(input)?;
+            if input.has_consumed() {
+                let (_, input) = p.set_consuming().parse(input)?;
+                pok(x1, input)
+            } else {
+                let (_, input) = p.parse(input)?;
+                pok(x1, input)
+            }
+        }
+    }
 }
-
 impl<'a, S, T, P> Sequential<'a, S, T> for P
 where
-    S: Stream + Copy,
+    S: Stream,
     P: Parser<'a, S, T>,
 {
 }
