@@ -1,135 +1,267 @@
-use super::branching::Branching;
+// use super::branching::Branching;
+// use crate::combinators::sequential::Sequential;
+// use crate::defs::Parser;
+// use crate::defs::Stream;
+
+use std::rc::Rc;
+
+use crate::combinators::branching::Branching;
 use crate::combinators::sequential::Sequential;
-use crate::defs::Parser;
-use crate::defs::Stream;
+use crate::{parser::*, stream::Stream};
 
-pub trait Repeating<'a, S, T>: Parser<'a, S, T>
+pub trait Repeating<'input, S, T>: Parser<'input, S, T>
 where
-    S: Stream + Copy,
+    S: Stream,
 {
-    /// Repeatedly runs `self` until it fails
-    fn many(&self) -> impl Parser<'a, S, Vec<T>>
-    where
-        S: Copy,
-    {
-        move |mut input| {
-            let mut results: Vec<T> = Vec::new();
-            while let Ok((x, xs)) = self.parse(input) {
-                results.push(x);
-                input = xs;
-            }
-            Ok((results, input))
-        }
-    }
+    /// repeatedly parses `self` atleast once until failure
+    fn some(&self) -> impl Parser<'input, S, Vec<T>> {
+        move |input| match self.parse(input) {
+            Err(PFailure {
+                location,
+                consumption,
+                unexpected,
+                expected,
+            }) => perr(location, consumption, unexpected, expected),
+            Ok((output, mut state)) => {
+                let mut consumption = state.consumption;
+                let mut xs = vec![output];
 
-    /// Parses self multiple times until `till` parses
-    fn many_till<P, B>(&self, till: &P) -> impl Parser<'a, S, Vec<T>>
-    where
-        P: Parser<'a, S, B>,
-        S: Copy,
-        Self: Sized,
-    {
-        // RC'd to use either for better parser errors
-        move |mut input| {
-            let mut out: Vec<T> = Vec::new();
-
-            loop {
-                let (x, xs) = till.either(self).parse(input)?;
-                match x {
-                    Err(v) => out.push(v),
-                    Ok(_) => return Ok((out, xs)),
+                loop {
+                    match self.parse(state) {
+                        Ok((output, new_state)) => {
+                            xs.push(output);
+                            state = new_state;
+                            consumption = consumption.merge(state.consumption);
+                        }
+                        Err(PFailure {
+                            location,
+                            consumption,
+                            unexpected,
+                            expected,
+                        }) => match consumption {
+                            Consumption::Consuming => {
+                                return perr(location, consumption, unexpected, expected)
+                            }
+                            Consumption::NonConsuming => break,
+                        },
+                    }
                 }
-
-                input = xs;
+                pok(xs, state.set_consumption(consumption))
             }
         }
     }
 
-    /// Repeatedly parse `self` separated by `sep`
-    /// Needs to have atleast 1 element
-    fn sep_by1<P, B>(&self, sep: &P) -> impl Parser<'a, S, Vec<T>>
-    where
-        P: Parser<'a, S, B>,
-        S: Copy + Stream,
-        Self: Sized,
-    {
-        move |input| {
-            let (x, input) = self.parse(input)?;
-            let (xs, input) = sep.ignore_left(self).many().parse(input)?;
-            Ok((std::iter::once(x).chain(xs).collect(), input))
+    /// repeatedly parse `self` until it fails
+    #[inline]
+    fn many(&self) -> impl Parser<'input, S, Vec<T>> {
+        move |input| match self.some().parse(input) {
+            Ok((output, state)) => pok(output, state),
+            Err(PFailure {
+                location,
+                consumption: Consumption::Consuming,
+                unexpected,
+                expected,
+            }) => perr(location, Consumption::Consuming, unexpected, expected),
+            Err(PFailure {
+                location: _,
+                consumption: Consumption::NonConsuming,
+                unexpected: _,
+                expected: _,
+            }) => pok(vec![], input.set_nonconsuming()),
         }
     }
-
-    /// Repeatedly parse `self` separated by `sep`
-    fn sep_by<P, B>(&self, sep: &P) -> impl Parser<'a, S, Vec<T>>
+    #[inline]
+    /// repeatedly parses `self` separated by `sep`
+    fn sep_by<P, U>(&self, sep: P) -> impl Parser<'input, S, Vec<T>>
     where
-        P: Parser<'a, S, B>,
-        S: Copy + Stream,
-        Self: Sized,
+        P: Parser<'input, S, U>,
     {
-        move |input| match self.sep_by1(sep).parse(input) {
-            Ok((x, xs)) => Ok((x, xs)),
-            Err(_) => Ok((vec![], input)),
-        }
-    }
-
-    /// Repeatedly runs `self` until it fails. the parser `self.some()` should succeed atleast once
-    fn some(&self) -> impl Parser<'a, S, Vec<T>>
-    where
-        S: Copy,
-    {
-        move |input| {
-            let (x, mut input) = self.parse(input)?;
-            let mut results = vec![x];
-            while let Ok((x, xs)) = self.parse(input) {
-                results.push(x);
-                input = xs;
+        move |input| match self.parse(input) {
+            Err(PFailure {
+                location,
+                consumption: Consumption::Consuming,
+                unexpected,
+                expected,
+            }) => perr(location, Consumption::Consuming, unexpected, expected),
+            Err(PFailure {
+                location: _,
+                consumption: Consumption::NonConsuming,
+                unexpected: _,
+                expected: _,
+            }) => pok(vec![], input.set_nonconsuming()),
+            Ok((output, state)) => {
+                let mut x = vec![output];
+                let (mut xs, state) = sep.seq_ref_r(self).many().parse(state)?;
+                x.append(&mut xs);
+                pok(x, state)
             }
-            Ok((results, input))
         }
     }
-    /// Repeatedly parses self `n` times
-    fn repeat_n(&self, n: usize) -> impl Parser<'a, S, Vec<T>>
-    where
-        S: Copy,
-    {
-        move |mut input| {
-            let mut matches = Vec::new();
 
-            for _ in 0..n {
-                let (x, new_input) = self.parse(input)?;
-                matches.push(x);
-                input = new_input;
+    #[inline]
+    /// repeatedly parses `self` one or more times separated by `sep`
+    fn sep_by1<P, U>(&self, sep: P) -> impl Parser<'input, S, Vec<T>>
+    where
+        P: Parser<'input, S, U>,
+    {
+        move |input| match self.parse(input) {
+            Err(PFailure {
+                location,
+                consumption,
+                unexpected,
+                expected,
+            }) => perr(location, consumption, unexpected, expected),
+            Ok((output, state)) => {
+                let mut x = vec![output];
+                let (mut xs, state) = sep.seq_ref_r(self).many().parse(state)?;
+                x.append(&mut xs);
+                pok(x, state)
             }
-
-            Ok((matches, input))
         }
     }
 
-    /// Creates a parser that parses a minumum of `min` times and a maximum of `max` times
-    fn count(&self, min: usize, max: usize) -> impl Parser<'a, S, Vec<T>>
+    /// repeatedly parses `self` one or more times until `till` is parsed`
+    fn some_till<P, U>(&self, till: P) -> impl Parser<'input, S, Vec<T>>
     where
-        S: Copy,
+        P: Parser<'input, S, U>,
     {
-        move |mut input| {
-            let mut out = Vec::new();
+        let till = Rc::new(till);
+        move |input| match till.clone().parse(input) {
+            Err(PFailure {
+                location,
+                consumption: Consumption::Consuming,
+                unexpected,
+                expected,
+            }) => perr(location, Consumption::Consuming, unexpected, expected),
+            Ok((_, state)) => pok(vec![], state),
+            Err(PFailure {
+                location: _,
+                consumption: _,
+                unexpected: _,
+                expected: _,
+            }) => match self.parse(input) {
+                Err(PFailure {
+                    location,
+                    consumption,
+                    unexpected,
+                    expected,
+                }) => perr(location, consumption, unexpected, expected),
+                Ok((output, mut state)) => {
+                    let mut xs = vec![output];
+                    let mut consumption = state.consumption;
 
-            while let Ok((x, new_input)) = self.parse(input) {
-                out.push(x);
-                if out.len() == max {
-                    return Ok((out, new_input));
+                    loop {
+                        match self.either(till.clone()).parse(state) {
+                            Ok((Ok(x), new_state)) => {
+                                xs.push(x);
+                                state = new_state;
+                                consumption = consumption.merge(state.consumption);
+                            }
+                            Ok((Err(_), new_state)) => {
+                                state = new_state;
+                                consumption = consumption.merge(state.consumption);
+                                break;
+                            }
+                            Err(PFailure {
+                                location,
+                                consumption,
+                                unexpected,
+                                expected,
+                            }) => return perr(location, consumption, unexpected, expected),
+                        }
+                    }
+                    pok(xs, state.set_consumption(consumption))
                 }
-                input = new_input;
+            },
+        }
+    }
+
+    /// repeatedly parses self until `till` succeeds
+    fn many_till<P, U>(&self, till: P) -> impl Parser<'input, S, Vec<T>>
+    where
+        P: Parser<'input, S, U>,
+    {
+        let till = Rc::new(till);
+        move |input| match self.some_till(Rc::clone(&till)).parse(input) {
+            Ok(x) => Ok(x),
+            Err(PFailure {
+                location: _,
+                unexpected: _,
+                consumption: Consumption::NonConsuming,
+                expected: _,
+            }) => pok(vec![], input.set_nonconsuming()),
+            Err(PFailure {
+                location,
+                unexpected,
+                consumption: Consumption::Consuming,
+                expected,
+            }) => perr(location, Consumption::Consuming, unexpected, expected),
+        }
+    }
+
+    /// parses `self` exactly `n` times
+    fn replicate(&self, n: usize) -> impl Parser<'input, S, Vec<T>> {
+        move |mut state: PState<'input, S>| {
+            let mut output = Vec::new();
+            let mut consumption = Consumption::NonConsuming;
+
+            while output.len() < n {
+                let (x, new_state) = if consumption.is_consuming() {
+                    self.set_consuming().parse(state)?
+                } else {
+                    self.parse(state)?
+                };
+
+                output.push(x);
+                state = new_state;
+                consumption = consumption.merge(state.consumption);
             }
 
-            if out.len() < min {
-                match self.parse(input) {
-                    Ok(_) => panic!("Should not occur"),
-                    Err(e) => Err(e),
-                }
-            } else {
-                Ok((out, input))
+            pok(output, state)
+        }
+    }
+
+    /// make `self` parse for a minimum of `min` times and a maximum of `max` times
+    fn range(&self, min: usize, max: usize) -> impl Parser<'input, S, Vec<T>> {
+        move |mut state: PState<'input, S>| {
+            let mut output = Vec::new();
+
+            let mut consumption = Consumption::NonConsuming;
+
+            while output.len() < min {
+                let (x, new_state) = if consumption.is_consuming() {
+                    self.set_consuming().parse(state)?
+                } else {
+                    self.parse(state)?
+                };
+
+                output.push(x);
+                state = new_state;
+                consumption = consumption.merge(state.consumption);
             }
+
+            while output.len() < max {
+                match self.parse(state) {
+                    Ok((x, new_state)) => {
+                        output.push(x);
+                        state = new_state;
+                        consumption = consumption.merge(state.consumption);
+                    }
+                    Err(PFailure {
+                        location: _,
+                        unexpected: _,
+                        consumption: Consumption::NonConsuming,
+                        expected: _,
+                    }) => break,
+                    Err(PFailure {
+                        location,
+                        unexpected,
+                        consumption: Consumption::Consuming,
+                        expected,
+                    }) => return perr(location, Consumption::Consuming, unexpected, expected),
+                }
+            }
+            pok(output, state)
         }
     }
 }

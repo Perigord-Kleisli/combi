@@ -1,108 +1,220 @@
-use crate::defs::Parser;
-use crate::defs::Stream;
+// use crate::defs::Parser;
+// use crate::defs::Stream;
 
-pub trait Branching<'a, S, T>: Parser<'a, S, T>
+use std::cmp::Ordering;
+
+use crate::parser::perr;
+use crate::parser::pok;
+use crate::parser::Consumption;
+use crate::parser::PFailure;
+use crate::parser::PState;
+use crate::parser::Parser;
+use crate::stream::Stream;
+
+pub trait Branching<'input, S, T>: Parser<'input, S, T>
 where
-    S: Stream + Copy,
+    S: Stream,
 {
-    /// The parser `p1.or(p2)` first applies `p1`, if it succeeds then it returns,
-    /// if it fails then `p2` is ran instead
     #[inline]
-    fn either<P, B>(&self, fallback: &P) -> impl Parser<'a, S, Result<T, B>>
+    /// The parser `p1.or(p2)` first parses `p1`, if it fails without consuming input, it uses `p2`
+    /// as fallback
+    fn or<P>(&self, fallback: P) -> impl Parser<'input, S, T>
     where
-        S: Copy,
-        P: Parser<'a, S, B>,
+        P: Parser<'input, S, T>,
     {
         move |input| match self.parse(input) {
-            Ok((x, xs)) => Ok((Ok(x), xs)),
-            Err((src_loc_1, mut reasons1)) => match fallback.parse(input) {
-                Ok((x, xs)) => Ok((Err(x), xs)),
-                Err((src_loc_2, mut reasons2)) => match src_loc_1.cmp(&src_loc_2) {
-                    std::cmp::Ordering::Less | std::cmp::Ordering::Equal => {
-                        reasons1.append(&mut reasons2);
-                        Err((src_loc_1, reasons1))
-                    }
-                    std::cmp::Ordering::Greater => {
-                        reasons2.append(&mut reasons1);
-                        Err((src_loc_2, reasons2))
-                    }
-                },
-            },
-        }
-    }
+            Ok((output, state)) => pok(output, state),
+            Err(PFailure {
+                location,
+                consumption: Consumption::Consuming,
+                unexpected,
+                expected,
+            }) => perr(location, Consumption::Consuming, unexpected, expected),
+            Err(PFailure {
+                location: loc1,
+                consumption: Consumption::NonConsuming,
+                unexpected: unex1,
+                expected: mut ex1,
+            }) => match fallback.parse(input) {
+                Ok((output, state)) => pok(output, state),
+                Err(PFailure {
+                    location: loc2,
+                    consumption: cons2,
+                    unexpected: unex2,
+                    expected: mut ex2,
+                }) => match loc1.cmp(&loc2) {
+                    Ordering::Less => perr(loc2, cons2, unex2, ex2),
+                    Ordering::Greater => perr(loc1, Consumption::NonConsuming, unex1, ex1),
+                    Ordering::Equal => {
+                        let unexpected = if let Some(e1) = unex1 {
+                            if let Some(e2) = unex2 {
+                                Some(e1.merge(e2))
+                            } else {
+                                Some(e1)
+                            }
+                        } else {
+                            unex2
+                        };
 
-    /// The parser `p1.or(p2)` first applies `p1`, if it succeeds then it returns,
-    /// if it fails then `p2` is ran instead
-    #[inline]
-    fn or<P>(&self, fallback: P) -> impl Parser<'a, S, T>
-    where
-        S: Copy,
-        P: Parser<'a, S, T>,
-    {
-        move |input| match self.parse(input) {
-            Ok((x, xs)) => Ok((x, xs)),
-            Err((src_loc_1, mut reasons1)) => match fallback.parse(input) {
-                Ok((x, xs)) => Ok((x, xs)),
-                Err((src_loc_2, mut reasons2)) => match src_loc_1.cmp(&src_loc_2) {
-                    std::cmp::Ordering::Less | std::cmp::Ordering::Equal => {
-                        reasons1.append(&mut reasons2);
-                        Err((src_loc_1, reasons1))
-                    }
-                    std::cmp::Ordering::Greater => {
-                        reasons2.append(&mut reasons1);
-                        Err((src_loc_2, reasons2))
+                        ex1.append(&mut ex2);
+                        perr(loc2, cons2, unexpected, ex1)
                     }
                 },
             },
         }
     }
 
-    /// Places a result in the case of failure
     #[inline]
-    fn or_pure(&self, fallback: T) -> impl Parser<'a, S, T>
+    /// The parser `p1.or(p2)` first parses `p1`, if it fails without consuming input, it uses `p2`
+    /// as fallback
+    fn either<P, U>(&self, fallback: P) -> impl Parser<'input, S, Result<T, U>>
     where
-        S: Copy,
-        T: Clone,
+        P: Parser<'input, S, U>,
     {
         move |input| match self.parse(input) {
-            Ok((x, xs)) => Ok((x, xs)),
-            Err(_) => Ok((fallback.clone(), input)),
+            Ok((output, state)) => pok(Ok(output), state),
+            Err(PFailure {
+                location,
+                consumption: Consumption::Consuming,
+                unexpected,
+                expected,
+            }) => perr(location, Consumption::Consuming, unexpected, expected),
+            Err(PFailure {
+                location: loc1,
+                consumption: Consumption::NonConsuming,
+                unexpected: unex1,
+                expected: mut ex1,
+            }) => match fallback.parse(input) {
+                Ok( ( output, state )) => pok(Err(output), state),
+                Err(PFailure {
+                    location: loc2,
+                    consumption: cons2,
+                    unexpected: unex2,
+                    expected: mut ex2,
+                }) => match loc1.cmp(&loc2) {
+                    Ordering::Less => perr(loc2, cons2, unex2, ex2),
+                    Ordering::Greater => {
+                        perr(loc1, Consumption::NonConsuming, unex1, ex1)
+                    }
+                    Ordering::Equal => {
+                        let unexpected = if let Some(e1) = unex1 {
+                            if let Some(e2) = unex2 {
+                                Some(e1.merge(e2))
+                            } else {
+                                Some(e1)
+                            }
+                        } else {
+                            unex2
+                        };
+
+                        ex1.append(&mut ex2);
+                        perr(loc2, cons2, unexpected, ex1)
+                    }
+                },
+            },
         }
     }
 
-    /// parser.opt() succeeds regardless of `parser` succeeds or not.
-    /// Returns `Some(_)` on success, and `None` on failure, as well as not consuming input
     #[inline]
-    fn opt(&self) -> impl Parser<'a, S, Option<T>>
-    where
-        S: Copy,
-    {
+    /// Sets `self`'s failure as non-consuming, allowing backtracking on failed parses that consume
+    /// input when using `.try()`
+    fn attempt(&self) -> impl Parser<'input, S, T> {
         move |input| match self.parse(input) {
-            Err(_) => Ok((None, input)),
-            Ok((x, s)) => Ok((Some(x), s)),
+            Err(PFailure {
+                location,
+                consumption: _,
+                unexpected,
+                expected,
+            }) => perr(location, Consumption::NonConsuming, unexpected, expected),
+            ok => ok,
         }
     }
 
-    /// Ignore parser output, if the original parser consumes input, this also consumes input
     #[inline]
-    fn ignore(&self) -> impl Parser<'a, S, ()> {
-        self.map(|_| ())
-    }
-
-    /// Replaces the result of parser with a provided value
-    #[inline]
-    fn fconst<B: Clone>(&self, x: B) -> impl Parser<'a, S, B> {
-        move |input| {
-            let (_, input) = self.parse(input)?;
-            Ok((x.clone(), input))
+    /// Parser succeeds if `self` succeeds or errors without consuming input. The parser still
+    /// fails if input is partially consumed
+    fn optional(&self) -> impl Parser<'input, S, Option<T>> {
+        move |input| match self.parse(input) {
+            Ok( ( output, state )) => pok(Some(output), state),
+            Err(PFailure {
+                location: _,
+                consumption: Consumption::NonConsuming,
+                unexpected: _,
+                expected: _,
+            }) => pok(None, input.set_nonconsuming()),
+            Err(PFailure {
+                location,
+                consumption,
+                unexpected,
+                expected,
+            }) => perr(location, consumption, unexpected, expected),
         }
     }
-
 }
 
-impl<'a, S, T, P> Branching<'a, S, T> for P
+#[macro_export]
+/// `choice![p1,p2,p3]` == `p1.or(p2.or(p3))`
+macro_rules! choice {
+    [$x:expr] => ($x);
+    [$x:expr, $($xs:expr),+] => {$x.or(choice!($($xs),+))};
+}
+
+/// folds an entire array of parsers, you would most likely need to wrap each item in an `Rc<_>` if
+/// the parser isn't already Cloneable
+pub fn choice<'input, Parsers, P, S, T>(parsers: Parsers) -> impl Parser<'input, S, T>
 where
-    S: Stream + Copy,
+    S: Stream,
+    Parsers: Clone + IntoIterator<Item = P>,
+    P: Parser<'input, S, T>,
+{
+    move |input: PState<'input, S>| {
+        let initial_error =
+            perr(input.location, Consumption::NonConsuming, None, vec![]);
+        parsers
+            .clone()
+            .into_iter()
+            .fold(initial_error, |accum, x| match accum {
+                Err(PFailure {
+                    location: loc1,
+                    consumption: Consumption::NonConsuming,
+                    unexpected: unex1,
+                    expected: mut ex1,
+                }) => match x.parse(input) {
+                    Err(PFailure {
+                        location: loc2,
+                        consumption: cons2,
+                        unexpected: unex2,
+                        expected: mut ex2,
+                    }) => match loc1.cmp(&loc2) {
+                        Ordering::Less => perr(loc2, cons2, unex2, ex2),
+                        Ordering::Greater => {
+                            perr(loc1, Consumption::NonConsuming, unex1, ex1)
+                        }
+                        Ordering::Equal => {
+                            let unexpected = if let Some(e1) = unex1 {
+                                if let Some(e2) = unex2 {
+                                    Some(e1.merge(e2))
+                                } else {
+                                    Some(e1)
+                                }
+                            } else {
+                                unex2
+                            };
+
+                            ex1.append(&mut ex2);
+                            perr(loc2, cons2, unexpected, ex1)
+                        }
+                    },
+                    x => x,
+                },
+                x => x,
+            })
+    }
+}
+
+impl<'a, S, T, P: ?Sized> Branching<'a, S, T> for P
+where
+    S: Stream,
     P: Parser<'a, S, T>,
 {
 }
