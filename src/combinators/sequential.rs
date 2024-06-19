@@ -13,12 +13,12 @@ where
         P: Parser<'input, S, U>,
     {
         move |input| {
-            let (x1, input) = self.parse(input)?;
+            let (x1, input) = self.raw_parse(input)?;
             if input.has_consumed() {
-                let (x2, input) = p.set_consuming().parse(input)?;
+                let (x2, input) = p.set_consuming().raw_parse(input)?;
                 pok(f(x1, x2), input)
             } else {
-                let (x2, input) = p.parse(input)?;
+                let (x2, input) = p.raw_parse(input)?;
                 pok(f(x1, x2), input)
             }
         }
@@ -31,12 +31,12 @@ where
         P: Parser<'input, S, U> + ?Sized,
     {
         move |input| {
-            let (_, input) = self.parse(input)?;
+            let (_, input) = self.raw_parse(input)?;
             if input.has_consumed() {
-                let (x2, input) = p.set_consuming().parse(input)?;
+                let (x2, input) = p.set_consuming().raw_parse(input)?;
                 pok(x2, input)
             } else {
-                let (x2, input) = p.parse(input)?;
+                let (x2, input) = p.raw_parse(input)?;
                 pok(x2, input)
             }
         }
@@ -49,12 +49,12 @@ where
         P: Parser<'input, S, U>,
     {
         move |input| {
-            let (_, input) = self.parse(input)?;
+            let (_, input) = self.raw_parse(input)?;
             if input.has_consumed() {
-                let (x2, input) = p.set_consuming().parse(input)?;
+                let (x2, input) = p.set_consuming().raw_parse(input)?;
                 pok(x2, input)
             } else {
-                let (x2, input) = p.parse(input)?;
+                let (x2, input) = p.raw_parse(input)?;
                 pok(x2, input)
             }
         }
@@ -66,12 +66,12 @@ where
         P: Parser<'input, S, U>,
     {
         move |input| {
-            let (x1, input) = self.parse(input)?;
+            let (x1, input) = self.raw_parse(input)?;
             if input.has_consumed() {
-                let (_, input) = p.set_consuming().parse(input)?;
+                let (_, input) = p.set_consuming().raw_parse(input)?;
                 pok(x1, input)
             } else {
-                let (_, input) = p.parse(input)?;
+                let (_, input) = p.raw_parse(input)?;
                 pok(x1, input)
             }
         }

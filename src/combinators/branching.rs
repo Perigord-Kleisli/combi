@@ -22,7 +22,7 @@ where
     where
         P: Parser<'input, S, T>,
     {
-        move |input| match self.parse(input) {
+        move |input| match self.raw_parse(input) {
             Ok((output, state)) => pok(output, state),
             Err(PFailure {
                 location,
@@ -35,7 +35,7 @@ where
                 consumption: Consumption::NonConsuming,
                 unexpected: unex1,
                 expected: mut ex1,
-            }) => match fallback.parse(input) {
+            }) => match fallback.raw_parse(input) {
                 Ok((output, state)) => pok(output, state),
                 Err(PFailure {
                     location: loc2,
@@ -71,7 +71,7 @@ where
     where
         P: Parser<'input, S, U>,
     {
-        move |input| match self.parse(input) {
+        move |input| match self.raw_parse(input) {
             Ok((output, state)) => pok(Ok(output), state),
             Err(PFailure {
                 location,
@@ -84,8 +84,8 @@ where
                 consumption: Consumption::NonConsuming,
                 unexpected: unex1,
                 expected: mut ex1,
-            }) => match fallback.parse(input) {
-                Ok( ( output, state )) => pok(Err(output), state),
+            }) => match fallback.raw_parse(input) {
+                Ok((output, state)) => pok(Err(output), state),
                 Err(PFailure {
                     location: loc2,
                     consumption: cons2,
@@ -93,9 +93,7 @@ where
                     expected: mut ex2,
                 }) => match loc1.cmp(&loc2) {
                     Ordering::Less => perr(loc2, cons2, unex2, ex2),
-                    Ordering::Greater => {
-                        perr(loc1, Consumption::NonConsuming, unex1, ex1)
-                    }
+                    Ordering::Greater => perr(loc1, Consumption::NonConsuming, unex1, ex1),
                     Ordering::Equal => {
                         let unexpected = if let Some(e1) = unex1 {
                             if let Some(e2) = unex2 {
@@ -116,10 +114,33 @@ where
     }
 
     #[inline]
+    /// Creates a parser that returns `val` when `self` fails without consuming input
+    fn or_pure(&self, val: T) -> impl Parser<'input, S, T>
+    where
+        T: Clone,
+    {
+        move |input| match self.raw_parse(input) {
+            Ok((x, input)) => pok(x, input),
+            Err(PFailure {
+                location,
+                unexpected,
+                consumption: Consumption::Consuming,
+                expected,
+            }) => perr(location, Consumption::Consuming, unexpected, expected),
+            Err(PFailure {
+                location: _,
+                unexpected: _,
+                consumption: Consumption::NonConsuming,
+                expected: _,
+            }) => pok(val.clone(), input.set_consuming()),
+        }
+    }
+
+    #[inline]
     /// Sets `self`'s failure as non-consuming, allowing backtracking on failed parses that consume
     /// input when using `.try()`
     fn attempt(&self) -> impl Parser<'input, S, T> {
-        move |input| match self.parse(input) {
+        move |input| match self.raw_parse(input) {
             Err(PFailure {
                 location,
                 consumption: _,
@@ -134,8 +155,8 @@ where
     /// Parser succeeds if `self` succeeds or errors without consuming input. The parser still
     /// fails if input is partially consumed
     fn optional(&self) -> impl Parser<'input, S, Option<T>> {
-        move |input| match self.parse(input) {
-            Ok( ( output, state )) => pok(Some(output), state),
+        move |input| match self.raw_parse(input) {
+            Ok((output, state)) => pok(Some(output), state),
             Err(PFailure {
                 location: _,
                 consumption: Consumption::NonConsuming,
@@ -168,8 +189,7 @@ where
     P: Parser<'input, S, T>,
 {
     move |input: PState<'input, S>| {
-        let initial_error =
-            perr(input.location, Consumption::NonConsuming, None, vec![]);
+        let initial_error = perr(input.location, Consumption::NonConsuming, None, vec![]);
         parsers
             .clone()
             .into_iter()
@@ -179,7 +199,7 @@ where
                     consumption: Consumption::NonConsuming,
                     unexpected: unex1,
                     expected: mut ex1,
-                }) => match x.parse(input) {
+                }) => match x.raw_parse(input) {
                     Err(PFailure {
                         location: loc2,
                         consumption: cons2,
@@ -187,9 +207,7 @@ where
                         expected: mut ex2,
                     }) => match loc1.cmp(&loc2) {
                         Ordering::Less => perr(loc2, cons2, unex2, ex2),
-                        Ordering::Greater => {
-                            perr(loc1, Consumption::NonConsuming, unex1, ex1)
-                        }
+                        Ordering::Greater => perr(loc1, Consumption::NonConsuming, unex1, ex1),
                         Ordering::Equal => {
                             let unexpected = if let Some(e1) = unex1 {
                                 if let Some(e2) = unex2 {

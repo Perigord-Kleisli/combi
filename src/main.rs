@@ -1,13 +1,28 @@
 use combi::parser::repeating::Repeating;
 use combi::parser::sequential::Sequential;
-use combi::parser::Parser;
-use combi::parsers::char::char;
+use combi::parser::{pok, PResult, PState, Parser};
+use combi::parsers::char::{char, char_literal};
+
+type PIn<'input> = PState<'input, &'input str>;
+type POut<'input, T> = PResult<'input, &'input str, T>;
+
+fn sample(input: PIn<'_>) -> POut<'_, char> {
+    let (_, input) = char('(').parse(input)?;
+    let (x, input) = char('b').parse(input)?;
+    let (_, input) = char(')').parse(input)?;
+    pok(x, input)
+}
 
 fn main() {
+    char('(').seq_r(char('b').seq_l(char(')'))).many1().test_parse("(b)(b)(a)");
+    sample.many1().test_parse("(b)(b)(a)");
+
     // char('(').seq_r(char('b')).many().test_parse("(b(b(b(a");
     // char('b').sep_by(char(',')).test_parse("b,b,b");
     // char('a').replicate(4).test_parse("aaab");
-    char('a').seq_r(char('b')).many_till(char(')')).test_parse("aba)");
+    // char('a').seq_r(char('b')).many_till(char(')')).test_parse("aba)");
+
+    // char('"').seq_r(char_literal.many_till(char('"'))).exhaustive().test_parse(r#""foo"""#)
 
     // char('a').ignore_left(char('b'))
     // char('a').or(char('b')).test_parse("");
