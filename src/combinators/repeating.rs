@@ -14,8 +14,8 @@ where
     S: Stream,
 {
     /// repeatedly parses `self` atleast once until failure
-    fn some(&self) -> impl Parser<'input, S, Vec<T>> {
-        move |input| match self.parse(input) {
+    fn many1(&self) -> impl Parser<'input, S, Vec<T>> {
+        move |input| match self.raw_parse(input) {
             Err(PFailure {
                 location,
                 consumption,
@@ -27,7 +27,7 @@ where
                 let mut xs = vec![output];
 
                 loop {
-                    match self.parse(state) {
+                    match self.raw_parse(state) {
                         Ok((output, new_state)) => {
                             xs.push(output);
                             state = new_state;
@@ -54,7 +54,7 @@ where
     /// repeatedly parse `self` until it fails
     #[inline]
     fn many(&self) -> impl Parser<'input, S, Vec<T>> {
-        move |input| match self.some().parse(input) {
+        move |input| match self.many1().raw_parse(input) {
             Ok((output, state)) => pok(output, state),
             Err(PFailure {
                 location,
@@ -76,7 +76,7 @@ where
     where
         P: Parser<'input, S, U>,
     {
-        move |input| match self.parse(input) {
+        move |input| match self.raw_parse(input) {
             Err(PFailure {
                 location,
                 consumption: Consumption::Consuming,
@@ -88,10 +88,11 @@ where
                 consumption: Consumption::NonConsuming,
                 unexpected: _,
                 expected: _,
+            // }) => panic!(),
             }) => pok(vec![], input.set_nonconsuming()),
             Ok((output, state)) => {
                 let mut x = vec![output];
-                let (mut xs, state) = sep.seq_ref_r(self).many().parse(state)?;
+                let (mut xs, state) = sep.seq_ref_r(self).many().raw_parse(state)?;
                 x.append(&mut xs);
                 pok(x, state)
             }
@@ -104,7 +105,7 @@ where
     where
         P: Parser<'input, S, U>,
     {
-        move |input| match self.parse(input) {
+        move |input| match self.raw_parse(input) {
             Err(PFailure {
                 location,
                 consumption,
@@ -113,7 +114,7 @@ where
             }) => perr(location, consumption, unexpected, expected),
             Ok((output, state)) => {
                 let mut x = vec![output];
-                let (mut xs, state) = sep.seq_ref_r(self).many().parse(state)?;
+                let (mut xs, state) = sep.seq_ref_r(self).many().raw_parse(state)?;
                 x.append(&mut xs);
                 pok(x, state)
             }
@@ -121,12 +122,14 @@ where
     }
 
     /// repeatedly parses `self` one or more times until `till` is parsed`
-    fn some_till<P, U>(&self, till: P) -> impl Parser<'input, S, Vec<T>>
+    fn some_till<P, U>(self, till: P) -> impl Parser<'input, S, Vec<T>>
     where
         P: Parser<'input, S, U>,
+        Self: Sized,
     {
+        let p = Rc::new(self);
         let till = Rc::new(till);
-        move |input| match till.clone().parse(input) {
+        move |input| match till.clone().raw_parse(input) {
             Err(PFailure {
                 location,
                 consumption: Consumption::Consuming,
@@ -139,7 +142,7 @@ where
                 consumption: _,
                 unexpected: _,
                 expected: _,
-            }) => match self.parse(input) {
+            }) => match p.clone().raw_parse(input) {
                 Err(PFailure {
                     location,
                     consumption,
@@ -151,13 +154,13 @@ where
                     let mut consumption = state.consumption;
 
                     loop {
-                        match self.either(till.clone()).parse(state) {
-                            Ok((Ok(x), new_state)) => {
+                        match till.clone().either(p.clone()).raw_parse(state) {
+                            Ok((Err(x), new_state)) => {
                                 xs.push(x);
                                 state = new_state;
                                 consumption = consumption.merge(state.consumption);
                             }
-                            Ok((Err(_), new_state)) => {
+                            Ok((Ok(_), new_state)) => {
                                 state = new_state;
                                 consumption = consumption.merge(state.consumption);
                                 break;
@@ -177,12 +180,15 @@ where
     }
 
     /// repeatedly parses self until `till` succeeds
-    fn many_till<P, U>(&self, till: P) -> impl Parser<'input, S, Vec<T>>
+    #[inline]
+    fn many_till<P, U>(self, till: P) -> impl Parser<'input, S, Vec<T>>
     where
         P: Parser<'input, S, U>,
+        Self: Sized,
     {
         let till = Rc::new(till);
-        move |input| match self.some_till(Rc::clone(&till)).parse(input) {
+        let p = Rc::new(self);
+        move |input| match p.clone().some_till(Rc::clone(&till)).raw_parse(input) {
             Ok(x) => Ok(x),
             Err(PFailure {
                 location: _,
@@ -207,9 +213,9 @@ where
 
             while output.len() < n {
                 let (x, new_state) = if consumption.is_consuming() {
-                    self.set_consuming().parse(state)?
+                    self.set_consuming().raw_parse(state)?
                 } else {
-                    self.parse(state)?
+                    self.raw_parse(state)?
                 };
 
                 output.push(x);
@@ -230,9 +236,9 @@ where
 
             while output.len() < min {
                 let (x, new_state) = if consumption.is_consuming() {
-                    self.set_consuming().parse(state)?
+                    self.set_consuming().raw_parse(state)?
                 } else {
-                    self.parse(state)?
+                    self.raw_parse(state)?
                 };
 
                 output.push(x);
@@ -241,7 +247,7 @@ where
             }
 
             while output.len() < max {
-                match self.parse(state) {
+                match self.raw_parse(state) {
                     Ok((x, new_state)) => {
                         output.push(x);
                         state = new_state;

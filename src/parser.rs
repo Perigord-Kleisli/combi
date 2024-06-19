@@ -1,4 +1,7 @@
-use std::{borrow::Borrow, fmt::Debug, path::Path, rc::Rc};
+use std::borrow::Borrow;
+use std::fmt::Debug;
+use std::path::Path;
+use std::rc::Rc;
 
 pub use crate::combinators::branching;
 pub use crate::combinators::repeating;
@@ -146,7 +149,7 @@ impl<'input, S: Stream> PState<'input, S> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ErrorItem<Item> {
     Tokens(Vec<Item>),
     Token(Item),
@@ -243,14 +246,22 @@ pub trait Parser<'a, S, T>
 where
     S: Stream,
 {
-    /// A direct implementation intended to be ran by other parsers.
+    /// A direct implementation intended to be ran by other parsers in the library.
     /// If intended to be ran directly by the user, instead use `run_parse`
-    fn parse(&self, input: PState<'a, S>) -> PResult<'a, S, T>;
+    fn raw_parse(&self, input: PState<'a, S>) -> PResult<'a, S, T>;
+
+    fn parse(&self, input: PState<'a, S>) -> PResult<'a, S, T> {
+        if input.has_consumed() {
+            self.set_consuming().raw_parse(input)
+        } else {
+            self.raw_parse(input)
+        }
+    }
 
     /// A wrapper around `parse` for user-level parsing
     #[inline]
     fn run_parser(&self, file_name: &'a str, input: S) -> Result<T, PFailure<'a, S::Item>> {
-        match self.parse(PState::new(file_name, input)) {
+        match self.raw_parse(PState::new(file_name, input)) {
             Ok((x, _)) => Ok(x),
             Err(e) => Err(e),
         }
@@ -276,7 +287,7 @@ where
     where
         Self: Sized,
     {
-        move |input| match self.parse(input) {
+        move |input| match self.raw_parse(input) {
             Ok((output, state)) => pok(output, state),
 
             Err(PFailure {
@@ -293,7 +304,7 @@ where
 
     #[inline]
     fn set_consumption(&self, consumption: Consumption) -> impl Parser<'a, S, T> {
-        move |input| match self.parse(input) {
+        move |input| match self.raw_parse(input) {
             Ok((output, state)) => pok(output, state.set_consumption(consumption)),
             Err(PFailure {
                 location,
@@ -306,7 +317,7 @@ where
 
     #[inline]
     fn set_consuming(&self) -> impl Parser<'a, S, T> {
-        move |input| match self.parse(input) {
+        move |input| match self.raw_parse(input) {
             Ok((output, state)) => pok(output, state.set_consuming()),
             Err(PFailure {
                 location,
@@ -317,13 +328,49 @@ where
         }
     }
 
+    #[inline]
+    fn pass_expectations(&self, expectations: Vec<ErrorItem<S::Item>>) -> impl Parser<'a, S, T>
+    where
+        S::Item: Clone,
+    {
+        move |input| match self.raw_parse(input) {
+            Ok(x) => Ok(x),
+            Err(PFailure {
+                location,
+                unexpected,
+                consumption,
+                mut expected,
+            }) => {
+                let mut expectations = expectations.clone();
+                expectations.append(&mut expected);
+                perr(location, consumption, unexpected, expected)
+            }
+        }
+    }
+
+    #[inline]
+    fn replace_expectations(&self, expectations: Vec<ErrorItem<S::Item>>) -> impl Parser<'a, S, T>
+    where
+        S::Item: Clone,
+    {
+        move |input| match self.raw_parse(input) {
+            Ok(x) => Ok(x),
+            Err(PFailure {
+                location,
+                unexpected,
+                consumption,
+                expected: _,
+            }) => perr(location, consumption, unexpected, expectations.clone()),
+        }
+    }
+
     /// Maps over the result of `self`. This does not change the amount of input consumed
     #[inline]
     fn map<F, B>(&self, f: F) -> impl Parser<'a, S, B>
     where
         F: Fn(T) -> B,
     {
-        move |input| match self.parse(input) {
+        move |input| match self.raw_parse(input) {
             Ok((output, state)) => pok(f(output), state),
             Err(PFailure {
                 location,
@@ -338,7 +385,7 @@ where
     #[inline]
     fn lookahead(&self) -> impl Parser<'a, S, T> {
         move |input| {
-            let (x, _) = self.parse(input)?;
+            let (x, _) = self.raw_parse(input)?;
             pok(x, input.set_nonconsuming())
         }
     }
@@ -347,7 +394,7 @@ where
     #[inline]
     fn exhaustive(&self) -> impl Parser<'a, S, T> {
         move |input| {
-            let (x, s) = self.parse(input)?;
+            let (x, s) = self.raw_parse(input)?;
             let (_, s) = eof(s)?;
             pok(x, s)
         }
@@ -361,8 +408,8 @@ where
         P: Parser<'a, S, B>,
     {
         move |input| {
-            let (x, s) = self.parse(input)?;
-            f(x).parse(s)
+            let (x, s) = self.raw_parse(input)?;
+            f(x).raw_parse(s)
         }
     }
 
@@ -370,7 +417,7 @@ where
     /// Replaces parser output
     fn replace<U: Clone>(&self, x: U) -> impl Parser<'a, S, U> {
         move |input| {
-            let (_, s) = self.parse(input)?;
+            let (_, s) = self.raw_parse(input)?;
             pok(x.clone(), s)
         }
     }
@@ -504,7 +551,7 @@ where
     F: Fn(PState<'a, S>) -> PResult<'a, S, T>,
     S: Stream,
 {
-    fn parse(&self, state: PState<'a, S>) -> PResult<'a, S, T> {
+    fn raw_parse(&self, state: PState<'a, S>) -> PResult<'a, S, T> {
         self(state)
     }
 }
@@ -514,8 +561,8 @@ where
     P: Parser<'a, S, T>,
     S: Stream,
 {
-    fn parse(&self, state: PState<'a, S>) -> PResult<'a, S, T> {
+    fn raw_parse(&self, state: PState<'a, S>) -> PResult<'a, S, T> {
         let x: &P = self.borrow();
-        x.parse(state)
+        x.raw_parse(state)
     }
 }
