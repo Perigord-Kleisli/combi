@@ -7,7 +7,7 @@ type PIn<'input> = PState<'input, &'input str>;
 type POut<'input, T> = PResult<'input, &'input str, T>;
 
 fn sample(input: PIn<'_>) -> POut<'_, char> {
-    let (_, input) = char('(').parse(input)?;
+    let (_, input) = char('(').raw_parse(input)?;
     let (x, input) = char('b').parse(input)?;
     let (_, input) = char(')').parse(input)?;
     pok(x, input)
@@ -15,7 +15,7 @@ fn sample(input: PIn<'_>) -> POut<'_, char> {
 
 fn main() {
     char('(').seq_r(char('b').seq_l(char(')'))).many1().test_parse("(b)(b)(a)");
-    sample.many1().test_parse("(b)(b)(a)");
+    sample.many1().test_parse("(b)(b)(b)");
 
     // char('(').seq_r(char('b')).many().test_parse("(b(b(b(a");
     // char('b').sep_by(char(',')).test_parse("b,b,b");

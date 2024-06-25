@@ -241,18 +241,46 @@ pub fn perr<S: Stream, T>(
     })
 }
 
+struct SecondStage<'a, S>(PState<'a, S>);
+
+trait ParserInput<'a, S: Stream, T> {
+    fn parse(self, p: &impl Parser<'a, S, T>) -> PResult<'a, S, T>;
+}
+
+impl<'a,S: Stream,T> ParserInput<'a, S, T> for PState<'a, S> {
+    fn parse(self, p: &impl Parser<'a, S, T>) -> PResult<'a, S, T> {
+        if self.has_consumed() {
+            p.raw_parse(self).map_err(|e| PFailure {
+                location: e.location,
+                unexpected: e.unexpected,
+                consumption: Consumption::Consuming,
+                expected: e.expected,
+            })
+        } else {
+            p.raw_parse(self)
+        }
+    }
+
+}
+
 /// A general trait for parsers
 pub trait Parser<'a, S, T>
 where
     S: Stream,
 {
-    /// A direct implementation intended to be ran by other parsers in the library.
+    /// A direct implementation intended only for parser implementations
+    /// If intended to be ran by other parsers use `.parse()`
     /// If intended to be ran directly by the user, instead use `run_parse`
     fn raw_parse(&self, input: PState<'a, S>) -> PResult<'a, S, T>;
 
     fn parse(&self, input: PState<'a, S>) -> PResult<'a, S, T> {
         if input.has_consumed() {
-            self.set_consuming().raw_parse(input)
+            self.raw_parse(input).map_err(|e| PFailure {
+                location: e.location,
+                unexpected: e.unexpected,
+                consumption: Consumption::Consuming,
+                expected: e.expected,
+            })
         } else {
             self.raw_parse(input)
         }
@@ -409,7 +437,11 @@ where
     {
         move |input| {
             let (x, s) = self.raw_parse(input)?;
-            f(x).raw_parse(s)
+            if s.has_consumed() {
+                f(x).set_consuming().raw_parse(s)
+            } else {
+                f(x).raw_parse(s)
+            }
         }
     }
 

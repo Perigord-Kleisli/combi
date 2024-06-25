@@ -81,7 +81,7 @@ fn object(input: PInput<'_>) -> POutput<'_, Json> {
 
     let (map,input) = pair.sep_by(symbol(",")).raw_parse(input)?;
 
-    // let (map, input) = pair.sep_by(symbol(",")).parse(input)?;
+    // let (map, input) = pair.sep_by(symbol(",")).raw_parse(input)?;
 
     let (_, input) = symbol("}").raw_parse(input)?;
     pok(Json::Object(HashMap::from_iter(map)), input)
