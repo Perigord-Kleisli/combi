@@ -61,7 +61,6 @@ VAL%idmail_2@email.com
 ```
 
 # TODO
-<<<<<<< HEAD
 - [x] Add a difference between Errors that consume input vs those that don't
 - [ ] Error message prettifier
 - [ ] Indentation parsers
