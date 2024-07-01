@@ -5,23 +5,11 @@ use std::{
 
 use combi::{
     choice,
-    parser::{
-        branching::Branching, pok, repeating::Repeating, sequential::Sequential, PResult, PState,
-        Parser,
-    },
+    combinators::{branching::Branching, repeating::Repeating, sequential::Sequential},
+    parser::Parser,
     parsers::char::{char, char_literal, float, symbol, Lexeme},
-    stream::Stream,
+    state::{pok, PResult, PState},
 };
-
-// #![feature(iter_intersperse)]
-//
-// use combi::defs::{
-//     pretty_print_error, Branching, PResult, PState, Parser, Repeating, Sequential, Stream,
-// };
-// use combi::parsers::char::*;
-// use std::collections::HashMap;
-// use std::io::{self, Read};
-//
 
 type PInput<'input> = PState<'input, &'input str>;
 type POutput<'input, T> = PResult<'input, &'input str, T>;
@@ -40,55 +28,53 @@ fn bool(input: PInput<'_>) -> POutput<'_, Json> {
     symbol("true")
         .replace(Json::Bool(true))
         .or(symbol("false").replace(Json::Bool(false)))
-        .raw_parse(input)
+        .parse_end(input)
 }
 
 fn null(input: PInput<'_>) -> POutput<'_, Json> {
-    symbol("null").replace(Json::Null).raw_parse(input)
+    symbol("null").replace(Json::Null).parse_end(input)
 }
 
 fn num(input: PInput<'_>) -> POutput<'_, Json> {
-    float.map(Json::Num).raw_parse(input)
+    float.map(Json::Num).parse_end(input)
 }
 
 fn string_literal(input: PInput<'_>) -> POutput<'_, String> {
     char('"')
         .seq_r(char_literal.many_till(char('"')))
         .map(|x| x.into_iter().collect())
-        .raw_parse(input)
+        .parse_end(input)
 }
 
 fn string(input: PInput<'_>) -> POutput<'_, Json> {
-    string_literal.map(Json::String).raw_parse(input)
+    string_literal.map(Json::String).parse_end(input)
 }
 
 fn array(input: PInput<'_>) -> POutput<'_, Json> {
-    let (_, input) = symbol("[").raw_parse(input)?;
-    let (xs, input) = json_parser.sep_by(symbol(",")).raw_parse(input)?;
-    let (_, input) = symbol("]").raw_parse(input)?;
+    let (_, input) = symbol("[").parse(input)?;
+    let (xs, input) = json_parser.sep_by(symbol(",")).parse(input)?;
+    let (_, input) = symbol("]").parse(input)?;
     pok(Json::Array(xs), input)
 }
 
 fn object(input: PInput<'_>) -> POutput<'_, Json> {
-    let (_, input) = symbol("{").raw_parse(input)?;
+    let (_, input) = symbol("{").parse(input)?;
 
     fn pair(input: PInput<'_>) -> POutput<'_, (String, Json)> {
-        let (s, input) = string_literal.raw_parse(input)?;
-        let (_, input) = symbol(":").raw_parse(input)?;
-        let (x, input) = json_parser.lexeme().raw_parse(input)?;
+        let (s, input) = string_literal.lexeme().parse(input)?;
+        let (_, input) = symbol(":").parse(input)?;
+        let (x, input) = json_parser.lexeme().parse(input)?;
         pok((s, x), input)
     }
 
-    let (map,input) = pair.sep_by(symbol(",")).raw_parse(input)?;
+    let (map, input) = pair.sep_by(symbol(",")).parse(input)?;
 
-    // let (map, input) = pair.sep_by(symbol(",")).raw_parse(input)?;
-
-    let (_, input) = symbol("}").raw_parse(input)?;
+    let (_, input) = symbol("}").parse(input)?;
     pok(Json::Object(HashMap::from_iter(map)), input)
 }
 
 fn json_parser(input: PInput<'_>) -> POutput<'_, Json> {
-    choice![null, bool, num, string, array, object].raw_parse(input)
+    choice![null, bool, num, string, array, object].parse_end(input)
 }
 
 fn pretty_print_json(indent: usize, json: &Json) -> String {

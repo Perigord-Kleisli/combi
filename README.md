@@ -61,8 +61,10 @@ VAL%idmail_2@email.com
 ```
 
 # TODO
-- [x] Add a difference between Errors that consume input vs those that don't, and generally improving parser errors.
-- [ ] Fix example programs and still unedited modules
+- [x] Add a difference between Errors that consume input vs those that don't
+- [ ] Error message prettifier
+- [ ] Indentation parsers
+- [x] Fix example programs and still unedited modules
 - [ ] Add ability to add custom errors
 - [ ] Add unit tests
 - [ ] Documentation
