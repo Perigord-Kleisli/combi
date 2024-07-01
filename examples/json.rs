@@ -11,8 +11,8 @@ use combi::{
     state::{pok, PResult, PState},
 };
 
-type PInput<'input> = PState<'input, &'input str>;
-type POutput<'input, T> = PResult<'input, &'input str, T>;
+type PInput<'input> = PState<'input, (), &'input str>;
+type POutput<'input, T> = PResult<'input, (), &'input str, T>;
 
 #[derive(Debug, Clone)]
 pub enum Json {
@@ -164,7 +164,7 @@ fn key_json(file_path: &str, file: &str, keys: &[String]) {
     match json_parser
         .lexeme()
         .exhaustive()
-        .run_parser(file_path, file)
+        .run_parser(file_path, (), file)
     {
         Ok(mut json) => {
             let mut indexed = String::from("");

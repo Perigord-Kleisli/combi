@@ -10,7 +10,7 @@ use crate::{
 };
 
 #[inline]
-fn uncons_char_stream<S>(input: PState<'_, S>) -> SecondStagePResult<'_, S, char>
+fn uncons_char_stream<St, S>(input: PState<'_, St, S>) -> SecondStagePResult<'_, St, S, char>
 where
     S: Stream<Item = char>,
 {
@@ -18,7 +18,7 @@ where
 }
 
 #[inline]
-fn char_satisfy<'input, S, F>(f: F) -> impl Parser<'input, S, char>
+fn char_satisfy<'input, St, S, F>(f: F) -> impl Parser<'input, St, S, char>
 where
     S: Stream<Item = char>,
     F: Fn(&char) -> bool,
@@ -27,7 +27,7 @@ where
 }
 
 #[inline]
-fn char_map<'input, S, F, T>(f: F) -> impl Parser<'input, S, T>
+fn char_map<'input, St, S, F, T>(f: F) -> impl Parser<'input, St, S, T>
 where
     S: Stream<Item = char>,
     F: Fn(&char) -> Option<T>,
@@ -37,7 +37,7 @@ where
 
 // Parses a single character
 #[inline]
-pub fn char<'input, S>(c: char) -> impl Parser<'input, S, char>
+pub fn char<'input, St, S>(c: char) -> impl Parser<'input, St, S, char>
 where
     S: Stream<Item = char>,
 {
@@ -46,7 +46,7 @@ where
 
 /// Returns any single character
 #[inline]
-pub fn any_single<S>(input: PState<'_, S>) -> PResult<'_, S, char>
+pub fn any_single<St, S>(input: PState<'_, St, S>) -> PResult<'_, St, S, char>
 where
     S: Stream<Item = char>,
 {
@@ -54,11 +54,11 @@ where
 }
 
 /// Parses any single character in `s`
-pub fn one_of<'input, S>(s: &'input str) -> impl Parser<'input, S, char>
+pub fn one_of<'input, St, S>(s: &'input str) -> impl Parser<'input, St, S, char>
 where
     S: Stream<Item = char>,
 {
-    move |input: PState<'input, S>| {
+    move |input: PState<'input, St, S>| {
         let (c, input) = uncons_char_stream(input)?;
         if s.contains(c) {
             pok(c, input.set_consuming())
@@ -76,11 +76,11 @@ where
 
 /// Parses any single character not in `s`
 /// it's a good idea to attach a `label` to this parser
-pub fn none_of<'input, S>(s: &'input str) -> impl Parser<'input, S, char>
+pub fn none_of<'input, St, S>(s: &'input str) -> impl Parser<'input, St, S, char>
 where
     S: Stream<Item = char>,
 {
-    move |input: PState<'input, S>| {
+    move |input: PState<'input, St, S>| {
         let (c, input) = uncons_char_stream(input)?;
         if !s.contains(c) {
             pok(c, input.set_consuming())
@@ -96,12 +96,13 @@ where
 }
 
 /// Parses any single character except `c`
-pub fn not_char<'input, S>(c: char) -> impl Parser<'input, S, char>
+pub fn not_char<'input, St, S>(c: char) -> impl Parser<'input, St, S, char>
 where
     S: Stream<Item = char>,
+    St: Clone,
 {
-    move |input| {
-        let (x, xs) = uncons_char_stream(input)?;
+    move |input: PState<'input, St, S>| {
+        let (x, xs) = uncons_char_stream(input.clone())?;
         if x != c {
             pok(x, xs)
         } else {
@@ -116,8 +117,8 @@ where
 }
 
 /// Parses a sequence of characters provided by `s`
-pub fn string<'input>(s: &'input str) -> impl Parser<'input, &'input str, &'input str> {
-    move |input: PState<'input, &'input str>| {
+pub fn string<'input, St>(s: &'input str) -> impl Parser<'input, St, &'input str, &'input str> {
+    move |input: PState<'input, St, &'input str>| {
         if let Some(s2) = input.input.get(..s.len()) {
             if s == s2 {
                 let location = s.chars().fold(input.location, |accum, x| {
@@ -134,6 +135,7 @@ pub fn string<'input>(s: &'input str) -> impl Parser<'input, &'input str, &'inpu
                         input: &input.input[s.len()..],
                         location,
                         consumption: Consumption::Consuming,
+                        user_state: input.user_state,
                     },
                 )
             } else {
@@ -157,7 +159,7 @@ pub fn string<'input>(s: &'input str) -> impl Parser<'input, &'input str, &'inpu
 
 /// Parses a single digit
 #[inline]
-pub fn digit<'input, S: Stream<Item = char>>(radix: u32) -> impl Parser<'input, S, char> {
+pub fn digit<'input, St, S: Stream<Item = char>>(radix: u32) -> impl Parser<'input, St, S, char> {
     move |input| {
         char_satisfy(|x| x.is_digit(radix))
             .label("digit")
@@ -167,58 +169,74 @@ pub fn digit<'input, S: Stream<Item = char>>(radix: u32) -> impl Parser<'input, 
 
 /// Parses a single ascii digit
 #[inline]
-pub fn ascii_digit<S: Stream<Item = char>>(input: PState<'_, S>) -> PResult<'_, S, char> {
+pub fn ascii_digit<St, S: Stream<Item = char>>(
+    input: PState<'_, St, S>,
+) -> PResult<'_, St, S, char> {
     char_satisfy(|x| x.is_ascii_digit())
         .label("digit")
         .raw_parse(input)
 }
 
 /// Parses a single whitespace character
-pub fn space_char<S: Stream<Item = char>>(state: PState<'_, S>) -> PResult<'_, S, char> {
+pub fn space_char<St, S: Stream<Item = char>>(
+    state: PState<'_, St, S>,
+) -> PResult<'_, St, S, char> {
     char_satisfy(|x| x.is_whitespace())
         .label("whitespace")
         .raw_parse(state)
 }
 
 /// Parses zero or more space characters
-pub fn space<S>(input: PState<'_, S>) -> PResult<'_, S, ()>
+pub fn space<St, S>(input: PState<'_, St, S>) -> PResult<'_, St, S, ()>
 where
     S: Stream<Item = char>,
+    St: Clone,
 {
     space_char.many().ignore().raw_parse(input)
 }
 
 /// Parses one or more space characters
-pub fn space1<S>(input: PState<'_, S>) -> PResult<'_, S, ()>
+pub fn space1<St, S>(input: PState<'_, St, S>) -> PResult<'_, St, S, ()>
 where
     S: Stream<Item = char>,
+    St: Clone,
 {
     space_char.many().ignore().raw_parse(input)
 }
 
-pub trait Lexeme<'a, S, T>: Parser<'a, S, T> + Sequential<'a, S, T>
+pub trait Lexeme<'a, St, S, T>: Parser<'a, St, S, T> + Sequential<'a, St, S, T>
 where
     S: Stream<Item = char>,
+    St: Clone,
 {
     ///Parses `self` and the whitespace after it
-    fn lexeme(&self) -> impl Parser<'a, S, T> {
+    fn lexeme(&self) -> impl Parser<'a, St, S, T> {
         self.seq_l(space)
     }
 }
 
-impl<'a, S, T, P> Lexeme<'a, S, T> for P
+impl<'a, St, S, T, P> Lexeme<'a, St, S, T> for P
 where
-    P: Parser<'a, S, T>,
+    P: Parser<'a, St, S, T>,
     S: Stream<Item = char>,
+    St: Clone,
 {
 }
 
 /// parses a string `s` and the whitespace after it
-pub fn symbol(s: &str) -> impl Parser<'_, &'_ str, &'_ str> {
+pub fn symbol<St>(s: &str) -> impl Parser<'_, St, &'_ str, &'_ str>
+where
+    St: Clone,
+{
     move |input| string(s).lexeme().raw_parse(input)
 }
 
-pub fn eol<'input>(input: PState<'input, &'input str>) -> PResult<'input, &'input str, ()> {
+pub fn eol<'input, St>(
+    input: PState<'input, St, &'input str>,
+) -> PResult<'input, St, &'input str, ()>
+where
+    St: Clone,
+{
     char('\n')
         .ignore()
         .or(string("\r\n").ignore())
@@ -226,9 +244,10 @@ pub fn eol<'input>(input: PState<'input, &'input str>) -> PResult<'input, &'inpu
 }
 
 /// Parses an integer, possibly negative or not
-pub fn int<S>(state: PState<'_, S>) -> PResult<'_, S, i64>
+pub fn int<St, S>(state: PState<'_, St, S>) -> PResult<'_, St, S, i64>
 where
     S: Stream<Item = char>,
+    St: Clone,
 {
     (move |state| {
         let (x, state) = char('-').optional().raw_parse(state)?;
@@ -251,9 +270,10 @@ where
     .raw_parse(state)
 }
 
-pub fn float<S>(input: PState<'_, S>) -> PResult<'_, S, f64>
+pub fn float<St, S>(input: PState<'_, St, S>) -> PResult<'_, St, S, f64>
 where
     S: Stream<Item = char>,
+    St: Clone,
 {
     (move |state| {
         let (x, state) = char('-').optional().raw_parse(state)?;
@@ -273,14 +293,15 @@ where
     .raw_parse(input)
 }
 
-pub fn usize<S>(input: PState<'_, S>) -> PResult<'_, S, usize>
+pub fn usize<St, S>(input: PState<'_, St, S>) -> PResult<'_, St, S, usize>
 where
     S: Stream<Item = char>,
+    St: Clone,
 {
     lex_integer(10).map(|x| x as usize).raw_parse(input)
 }
 
-fn lex_esc_char<S>(input: PState<'_, S>) -> PResult<'_, S, char>
+fn lex_esc_char<St, S>(input: PState<'_, St, S>) -> PResult<'_, St, S, char>
 where
     S: Stream<Item = char>,
 {
@@ -302,7 +323,7 @@ where
     }
 }
 
-fn lex_base_char<S>(input: PState<'_, S>) -> PResult<'_, S, u32>
+fn lex_base_char<St, S>(input: PState<'_, St, S>) -> PResult<'_, St, S, u32>
 where
     S: Stream<Item = char>,
 {
@@ -319,27 +340,30 @@ where
     }
 }
 
-fn lex_digits<'a, S>(base: u32) -> impl Parser<'a, S, Vec<u32>>
+fn lex_digits<'a, St, S>(base: u32) -> impl Parser<'a, St, S, Vec<u32>>
 where
     S: Stream<Item = char>,
+    St: Clone,
 {
-    move |input: PState<'a, S>| char_map(|c| c.to_digit(base)).some().raw_parse(input)
+    move |input: PState<'a, St, S>| char_map(|c| c.to_digit(base)).some().raw_parse(input)
 }
 
-pub fn lex_integer<'a, S>(base: u32) -> impl Parser<'a, S, u32>
+pub fn lex_integer<'a, St, S>(base: u32) -> impl Parser<'a, St, S, u32>
 where
     S: Stream<Item = char>,
+    St: Clone,
 {
-    move |input: PState<'a, S>| {
+    move |input: PState<'a, St, S>| {
         let (n, input) = lex_digits(base).raw_parse(input)?;
         let n = n.into_iter().fold(0, |accum, x| accum * base + x);
         Ok((n, input.set_consuming()))
     }
 }
 
-fn lex_numeric<S>(input: PState<'_, S>) -> PResult<'_, S, char>
+fn lex_numeric<St, S>(input: PState<'_, St, S>) -> PResult<'_, St, S, char>
 where
     S: Stream<Item = char>,
+    St: Clone,
 {
     let (base, input) = lex_base_char.or_pure(10).raw_parse(input)?;
     let (n, input) = lex_integer(base).raw_parse(input)?;
@@ -354,7 +378,9 @@ where
     }
 }
 
-pub fn range<'input, S, Range: RangeBounds<char>>(range: Range) -> impl Parser<'input, S, char>
+pub fn range<'input, St, S, Range: RangeBounds<char>>(
+    range: Range,
+) -> impl Parser<'input, St, S, char>
 where
     S: Stream<Item = char>,
 {
@@ -373,7 +399,9 @@ where
     }
 }
 
-pub fn not_range<'input, S, Range: RangeBounds<char>>(range: Range) -> impl Parser<'input, S, char>
+pub fn not_range<'input, St, S, Range: RangeBounds<char>>(
+    range: Range,
+) -> impl Parser<'input, St, S, char>
 where
     S: Stream<Item = char>,
 {
@@ -392,9 +420,10 @@ where
     }
 }
 
-fn lex_char_e<S>(input: PState<'_, S>) -> PResult<'_, S, (char, bool)>
+fn lex_char_e<St, S>(input: PState<'_, St, S>) -> PResult<'_, St, S, (char, bool)>
 where
     S: Stream<Item = char>,
+    St: Clone,
 {
     let (x, input) = any_single.raw_parse(input)?;
     if x == '\\' {
@@ -407,9 +436,10 @@ where
     }
 }
 
-pub fn char_literal<S>(input: PState<'_, S>) -> PResult<'_, S, char>
+pub fn char_literal<St, S>(input: PState<'_, St, S>) -> PResult<'_, St, S, char>
 where
     S: Stream<Item = char>,
+    St: std::clone::Clone,
 {
     (move |input| {
         let ((r, _), input) = lex_char_e(input)?;
@@ -419,7 +449,7 @@ where
     .raw_parse(input)
 }
 
-pub fn any_with_escapes<S>(s: &str) -> impl Parser<'_, S, char>
+pub fn any_with_escapes<St, S>(s: &str) -> impl Parser<'_, St, S, char>
 where
     S: Stream<Item = char>,
 {
@@ -463,7 +493,7 @@ pub mod class {
         state::{perr, pok, Consumption, PResult, PState},
     };
 
-    pub fn word<S>(input: PState<'_, S>) -> PResult<'_, S, char>
+    pub fn word<St, S>(input: PState<'_, St, S>) -> PResult<'_, St, S, char>
     where
         S: Stream<Item = char>,
     {
@@ -479,7 +509,7 @@ pub mod class {
             )
         }
     }
-    pub fn not_word<S>(input: PState<'_, S>) -> PResult<'_, S, char>
+    pub fn not_word<St, S>(input: PState<'_, St, S>) -> PResult<'_, St, S, char>
     where
         S: Stream<Item = char>,
     {
@@ -496,7 +526,7 @@ pub mod class {
         }
     }
 
-    pub fn digit<S>(input: PState<'_, S>) -> PResult<'_, S, char>
+    pub fn digit<St, S>(input: PState<'_, St, S>) -> PResult<'_, St, S, char>
     where
         S: Stream<Item = char>,
     {
@@ -513,7 +543,7 @@ pub mod class {
         }
     }
 
-    pub fn not_digit<S>(input: PState<'_, S>) -> PResult<'_, S, char>
+    pub fn not_digit<St, S>(input: PState<'_, St, S>) -> PResult<'_, St, S, char>
     where
         S: Stream<Item = char>,
     {
@@ -530,7 +560,7 @@ pub mod class {
         }
     }
 
-    pub fn space<S>(input: PState<'_, S>) -> PResult<'_, S, char>
+    pub fn space<St, S>(input: PState<'_, St, S>) -> PResult<'_, St, S, char>
     where
         S: Stream<Item = char>,
     {
@@ -547,7 +577,7 @@ pub mod class {
         }
     }
 
-    pub fn not_space<S>(input: PState<'_, S>) -> PResult<'_, S, char>
+    pub fn not_space<St, S>(input: PState<'_, St, S>) -> PResult<'_, St, S, char>
     where
         S: Stream<Item = char>,
     {
@@ -564,16 +594,17 @@ pub mod class {
         }
     }
 
-    pub fn word_boundary<S>(input: PState<'_, S>) -> PResult<'_, S, char>
+    pub fn word_boundary<St, S>(input: PState<'_, St, S>) -> PResult<'_, St, S, char>
     where
         S: Stream<Item = char>,
+        St: Clone,
     {
         let (x, input) = word.parse(input)?;
-        let (_, _) = not_word.parse(input)?;
+        let (_, _) = not_word.parse(input.clone())?;
         pok(x, input)
     }
 
-    pub fn not_word_boundary<S>(input: PState<'_, S>) -> PResult<'_, S, char>
+    pub fn not_word_boundary<St, S>(input: PState<'_, St, S>) -> PResult<'_, St, S, char>
     where
         S: Stream<Item = char>,
     {
