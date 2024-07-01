@@ -12,17 +12,19 @@ use crate::state::{perr, pok, Consumption, PState};
 use crate::util::Either;
 use crate::{parser::*, stream::Stream};
 
-pub trait Repeating<'input, S, T>: Parser<'input, S, T> + Branching<'input, S, T>
+pub trait Repeating<'input, St, S, T>:
+    Parser<'input, St, S, T> + Branching<'input, St, S, T>
 where
     S: Stream,
+    St: Clone,
 {
     /// repeatedly parses `self` atleast once until failure
-    fn some(&self) -> impl Parser<'input, S, Vec<T>> {
-        move |input| match self.parse(input) {
+    fn some(&self) -> impl Parser<'input, St, S, Vec<T>> {
+        move |input: PState<'input, St, S>| match self.parse(input.clone()) {
             Err(e) => Err(e),
             Ok((x, mut input)) => {
                 let mut out = vec![x];
-                while let (Some(v), new_input) = self.optional().parse(input)? {
+                while let (Some(v), new_input) = self.optional().parse(input.clone())? {
                     out.push(v);
                     input = new_input;
                 }
@@ -33,8 +35,8 @@ where
 
     /// repeatedly parse `self` until it fails
     #[inline]
-    fn many(&self) -> impl Parser<'input, S, Vec<T>> {
-        move |input: PState<'input, S>| match self.some().parse_end(input) {
+    fn many(&self) -> impl Parser<'input, St, S, Vec<T>> {
+        move |input: PState<'input, St, S>| match self.some().parse_end(input.clone()) {
             Ok((output, state)) => pok(output, state),
             Err(PFailure {
                 location,
@@ -52,11 +54,11 @@ where
     }
     #[inline]
     /// repeatedly parses `self` separated by `sep`
-    fn sep_by<P, U>(&self, sep: P) -> impl Parser<'input, S, Vec<T>>
+    fn sep_by<P, U>(&self, sep: P) -> impl Parser<'input, St, S, Vec<T>>
     where
-        P: Parser<'input, S, U>,
+        P: Parser<'input, St, S, U>,
     {
-        move |input: PState<'input, S>| match self.parse(input) {
+        move |input: PState<'input, St, S>| match self.parse(input.clone()) {
             Err(PFailure {
                 location,
                 consumption: Consumption::Consuming,
@@ -81,9 +83,9 @@ where
 
     #[inline]
     /// repeatedly parses `self` one or more times separated by `sep`
-    fn sep_by1<P, U>(&self, sep: P) -> impl Parser<'input, S, Vec<T>>
+    fn sep_by1<P, U>(&self, sep: P) -> impl Parser<'input, St, S, Vec<T>>
     where
-        P: Parser<'input, S, U>,
+        P: Parser<'input, St, S, U>,
     {
         move |input| match self.parse(input) {
             Err(PFailure {
@@ -102,13 +104,14 @@ where
     }
 
     /// repeatedly parses `self` one or more times until `till` is parsed`
-    fn some_till<P, U>(&self, till: P) -> impl Parser<'input, S, Vec<T>>
+    fn some_till<P, U>(&self, till: P) -> impl Parser<'input, St, S, Vec<T>>
     where
-        P: Parser<'input, S, U>,
+        P: Parser<'input, St, S, U>,
+        St: Clone,
         Self: Sized,
     {
         let till = Rc::new(till);
-        move |input| match till.clone().parse(input) {
+        move |input: PState<'input, St, S>| match till.clone().parse(input.clone()) {
             Err(PFailure {
                 location,
                 consumption: Consumption::Consuming,
@@ -132,7 +135,7 @@ where
                     let mut xs = vec![output];
 
                     while let (Some(l), new_input) =
-                        self.either(till.clone()).optional().parse(input)?
+                        self.either(till.clone()).optional().parse(input.clone())?
                     {
                         input = new_input;
                         match l {
@@ -151,14 +154,18 @@ where
 
     /// repeatedly parses self until `till` succeeds
     #[inline]
-    fn many_till<P, U>(self, till: P) -> impl Parser<'input, S, Vec<T>>
+    fn many_till<P, U>(self, till: P) -> impl Parser<'input, St, S, Vec<T>>
     where
-        P: Parser<'input, S, U>,
+        P: Parser<'input, St, S, U>,
         Self: Sized,
     {
         let till = Rc::new(till);
         let p = Rc::new(self);
-        move |input: PState<'input, S>| match p.clone().some_till(Rc::clone(&till)).parse(input) {
+        move |input: PState<'input, St, S>| match p
+            .clone()
+            .some_till(Rc::clone(&till))
+            .parse(input.clone())
+        {
             Ok((x, input)) => pok(x, input),
             Err(PFailure {
                 location: _,
@@ -176,8 +183,8 @@ where
     }
 
     /// parses `self` exactly `n` times
-    fn replicate(&self, n: usize) -> impl Parser<'input, S, Vec<T>> {
-        move |mut state: PState<'input, S>| {
+    fn replicate(&self, n: usize) -> impl Parser<'input, St, S, Vec<T>> {
+        move |mut state: PState<'input, St, S>| {
             let mut output = Vec::new();
             let mut consumption = Consumption::NonConsuming;
 
@@ -198,8 +205,8 @@ where
     }
 
     /// make `self` parse for a minimum of `min` times and a maximum of `max` times
-    fn range(&self, min: usize, max: usize) -> impl Parser<'input, S, Vec<T>> {
-        move |mut state: PState<'input, S>| {
+    fn range(&self, min: usize, max: usize) -> impl Parser<'input, St, S, Vec<T>> {
+        move |mut state: PState<'input, St, S>| {
             let mut output = Vec::new();
 
             let mut consumption = Consumption::NonConsuming;
@@ -217,7 +224,7 @@ where
             }
 
             while output.len() < max {
-                match self.raw_parse(state) {
+                match self.raw_parse(state.clone()) {
                     Ok((x, new_state)) => {
                         output.push(x);
                         state = new_state;
@@ -241,9 +248,9 @@ where
         }
     }
 
-    fn chainl1<P, F>(&self, op: P) -> impl Parser<'input, S, T>
+    fn chainl1<P, F>(&self, op: P) -> impl Parser<'input, St, S, T>
     where
-        P: Parser<'input, S, F>,
+        P: Parser<'input, St, S, F>,
         F: Fn(T, T) -> T,
         Self: Sized,
     {
@@ -251,9 +258,9 @@ where
             let (mut x, mut input) = self.parse(input)?;
 
             while let (Some(f), new_input) = op
-                .seq_ref(self, |f, y| move |x| f(x, y))
+                .seq_ref(self, |f: F, y| move |x| f(x, y))
                 .optional()
-                .parse(input)?
+                .parse(input.clone())?
             {
                 input = new_input;
                 x = f(x);
@@ -264,9 +271,10 @@ where
     }
 }
 
-impl<'a, S, T, P> Repeating<'a, S, T> for P
+impl<'a, St, S, T, P> Repeating<'a, St, S, T> for P
 where
     S: Stream,
-    P: Parser<'a, S, T>,
+    St: Clone,
+    P: Parser<'a, St, S, T>,
 {
 }

@@ -192,6 +192,35 @@ where
     fn ignore(&self) -> impl Parser<'input, St, S, ()> {
         self.replace(())
     }
+
+    #[inline]
+    fn modify_state<F>(&self, f: F) -> impl Parser<'input, St, S, ()>
+    where
+        F: Fn(St) -> St,
+    {
+        move |mut input: PState<'input, St, S>| {
+            input.user_state = f(input.user_state);
+            pok((), input)
+        }
+    }
+
+    #[inline]
+    fn put_state(&self, state: St) -> impl Parser<'input, St, S, ()>
+    where
+        St: Clone,
+    {
+        move |mut input: PState<'input, St, S>| {
+            input.user_state = state.clone();
+            pok((), input)
+        }
+    }
+
+    fn get_state(&self) -> impl Parser<'input, St, S, St>
+    where
+        St: Clone,
+    {
+        |input: PState<'input, St, S>| pok(input.user_state.clone(), input)
+    }
 }
 
 impl<'a, St, S, T, F> Parser<'a, St, S, T> for F

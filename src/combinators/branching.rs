@@ -52,18 +52,19 @@ fn merge_pfailures<'a, Item>(
     }
 }
 
-pub trait Branching<'input, S, T>: Parser<'input, S, T>
+pub trait Branching<'input, St, S, T>: Parser<'input, St, S, T>
 where
     S: Stream,
+    St: Clone
 {
     #[inline]
     /// The parser `p1.or(p2)` first parses `p1`, if it fails without consuming input, it uses `p2`
     /// as fallback
-    fn or<P>(&self, fallback: P) -> impl Parser<'input, S, T>
+    fn or<P>(&self, fallback: P) -> impl Parser<'input, St, S, T>
     where
-        P: Parser<'input, S, T>,
+        P: Parser<'input, St, S, T>,
     {
-        move |input| match self.parse(input) {
+        move |input: PState<'input, St, S>| match self.parse(input.clone()) {
             Ok((x, input)) => pok(x, input),
             Err(e) if e.consumption == Consumption::Consuming => Err(e),
             Err(e1) => match fallback.parse(input) {
@@ -76,11 +77,11 @@ where
     #[inline]
     /// The parser `p1.or(p2)` first parses `p1`, if it fails without consuming input, it uses `p2`
     /// as fallback
-    fn or_ref<P>(&self, fallback: &P) -> impl Parser<'input, S, T>
+    fn or_ref<P>(&self, fallback: &P) -> impl Parser<'input, St, S, T>
     where
-        P: Parser<'input, S, T>,
+        P: Parser<'input, St, S, T>,
     {
-        move |input| match self.parse(input) {
+        move |input: PState<'input, St, S>| match self.parse(input.clone()) {
             Ok((x, input)) => pok(x, input),
             Err(e) if e.consumption == Consumption::Consuming => Err(e),
             Err(e1) => match fallback.parse(input) {
@@ -93,11 +94,11 @@ where
     #[inline]
     /// The parser `p1.or(p2)` first parses `p1`, if it fails without consuming input, it uses `p2`
     /// as fallback
-    fn either<P, U>(&self, fallback: P) -> impl Parser<'input, S, Either<T, U>>
+    fn either<P, U>(&self, fallback: P) -> impl Parser<'input, St, S, Either<T, U>>
     where
-        P: Parser<'input, S, U>,
+        P: Parser<'input, St, S, U>,
     {
-        move |input| match self.parse(input) {
+        move |input: PState<'input, St, S>| match self.parse(input.clone()) {
             Ok((x, input)) => pok(Either::Left(x), input),
             Err(e) if e.consumption == Consumption::Consuming => Err(e),
             Err(e1) => match fallback.parse(input) {
@@ -109,11 +110,11 @@ where
 
     #[inline]
     /// Creates a parser that returns `val` when `self` fails without consuming input
-    fn or_pure(&self, val: T) -> impl Parser<'input, S, T>
+    fn or_pure(&self, val: T) -> impl Parser<'input, St, S, T>
     where
         T: Clone,
     {
-        move |input: PState<'input, S>| match self.parse(input) {
+        move |input: PState<'input, St, S>| match self.parse(input.clone()) {
             Ok((x, input)) => pok(x, input),
             Err(PFailure {
                 location,
@@ -133,7 +134,7 @@ where
     #[inline]
     /// Sets `self`'s failure as non-consuming, allowing backtracking on failed parses that consume
     /// input when using `.attempt()`
-    fn attempt(&self) -> impl Parser<'input, S, T> {
+    fn attempt(&self) -> impl Parser<'input, St, S, T> {
         move |input| match self.parse(input) {
             Err(PFailure {
                 location,
@@ -148,8 +149,9 @@ where
     #[inline]
     /// Parser succeeds if `self` succeeds or errors without consuming input. The parser still
     /// fails if input is partially consumed
-    fn optional(&self) -> impl Parser<'input, S, Option<T>> {
-        move |input: PState<'input, S>| match self.parse(input) {
+    fn optional(&self) -> impl Parser<'input, St, S, Option<T>>
+    {
+        move |input: PState<'input, St, S>| match self.parse(input.clone()) {
             Ok((output, state)) => pok(Some(output), state),
             Err(PFailure {
                 location: _,
@@ -174,9 +176,10 @@ macro_rules! choice {
     [$x:expr, $($xs:expr),+] => {$x.or(choice!($($xs),+))};
 }
 
-impl<'a, S, T, P> Branching<'a, S, T> for P
+impl<'a, St, S, T, P> Branching<'a, St, S, T> for P
 where
     S: Stream,
-    P: Parser<'a, S, T>,
+    St: Clone,
+    P: Parser<'a, St, S, T>,
 {
 }
