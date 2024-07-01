@@ -1,4 +1,5 @@
-use crate::parser::{pok, Parser};
+use crate::parser::Parser;
+use crate::state::pok;
 use crate::stream::Stream;
 
 pub trait Sequential<'input, S, T>: Parser<'input, S, T>
@@ -13,14 +14,23 @@ where
         P: Parser<'input, S, U>,
     {
         move |input| {
-            let (x1, input) = self.raw_parse(input)?;
-            if input.has_consumed() {
-                let (x2, input) = p.set_consuming().raw_parse(input)?;
-                pok(f(x1, x2), input)
-            } else {
-                let (x2, input) = p.raw_parse(input)?;
-                pok(f(x1, x2), input)
-            }
+            let (x,input) = self.parse(input)?;
+            let (y,input) = p.parse(input)?;
+            pok(f(x,y),input)
+        }
+    }
+
+    #[inline]
+    /// Version of `seq` that takes a reference instead
+    fn seq_ref<F, P, U, V>(&self, p: &P, f: F) -> impl Parser<'input, S, V>
+    where
+        F: Fn(T, U) -> V,
+        P: Parser<'input, S, U>,
+    {
+        move |input| {
+            let (x,input) = self.parse(input)?;
+            let (y,input) = p.parse(input)?;
+            pok(f(x,y),input)
         }
     }
 
@@ -31,14 +41,8 @@ where
         P: Parser<'input, S, U> + ?Sized,
     {
         move |input| {
-            let (_, input) = self.raw_parse(input)?;
-            if input.has_consumed() {
-                let (x2, input) = p.set_consuming().raw_parse(input)?;
-                pok(x2, input)
-            } else {
-                let (x2, input) = p.raw_parse(input)?;
-                pok(x2, input)
-            }
+            let (_, input) = self.parse(input)?;
+            p.parse_end(input)
         }
     }
 
@@ -49,14 +53,8 @@ where
         P: Parser<'input, S, U>,
     {
         move |input| {
-            let (_, input) = self.raw_parse(input)?;
-            if input.has_consumed() {
-                let (x2, input) = p.set_consuming().raw_parse(input)?;
-                pok(x2, input)
-            } else {
-                let (x2, input) = p.raw_parse(input)?;
-                pok(x2, input)
-            }
+            let (_, input) = self.parse(input)?;
+            p.parse_end(input)
         }
     }
 
@@ -66,14 +64,9 @@ where
         P: Parser<'input, S, U>,
     {
         move |input| {
-            let (x1, input) = self.raw_parse(input)?;
-            if input.has_consumed() {
-                let (_, input) = p.set_consuming().raw_parse(input)?;
-                pok(x1, input)
-            } else {
-                let (_, input) = p.raw_parse(input)?;
-                pok(x1, input)
-            }
+            let (x, input) = self.parse(input)?;
+            let (_, input) = p.parse(input)?;
+            pok(x,input)
         }
     }
 }

@@ -1,295 +1,47 @@
 use std::borrow::Borrow;
 use std::fmt::Debug;
-use std::path::Path;
 use std::rc::Rc;
 
 pub use crate::combinators::branching;
 pub use crate::combinators::repeating;
 pub use crate::combinators::sequential;
+pub use crate::error::*;
+pub use crate::state::*;
 pub use crate::stream::Stream;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SourceLoc<'file> {
-    pub col: usize,
-    pub line: usize,
-    pub file: &'file Path,
-}
+// A general trait for parsers
 
-impl<'file> SourceLoc<'file> {
-    #[inline]
-    pub fn advance_col(self) -> Self {
-        SourceLoc {
-            col: self.col + 1,
-            line: self.line,
-            file: self.file,
-        }
-    }
-
-    #[inline]
-    pub fn advance_line(self) -> Self {
-        SourceLoc {
-            col: 0,
-            line: self.line + 1,
-            file: self.file,
-        }
-    }
-}
-
-impl<'file> PartialOrd for SourceLoc<'file> {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl<'file> Ord for SourceLoc<'file> {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        match self.line.cmp(&other.line) {
-            std::cmp::Ordering::Equal => {}
-            ord => return ord,
-        }
-        self.col.cmp(&other.col)
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct PState<'input, S> {
-    pub input: S,
-    pub location: SourceLoc<'input>,
-    pub consumption: Consumption,
-}
-
-impl<'input, S: Stream> PState<'input, S> {
-    fn new(file: &'input str, input: S) -> Self {
-        PState {
-            input,
-            location: SourceLoc {
-                col: 0,
-                line: 1,
-                file: std::path::Path::new(file),
-            },
-            consumption: Consumption::NonConsuming,
-        }
-    }
-
-    pub fn uncons<P>(self, is_newline: P) -> PResult<'input, S, S::Item>
-    where
-        P: Fn(&S::Item) -> bool,
-    {
-        match self.input.uncons() {
-            None => perr(
-                self.location.advance_col(),
-                Consumption::NonConsuming,
-                Some(ErrorItem::EOF),
-                vec![],
-            ),
-            Some((x, xs)) => {
-                if is_newline(&x) {
-                    pok(
-                        x,
-                        PState {
-                            input: xs,
-                            location: self.location.advance_line(),
-                            consumption: Consumption::Consuming,
-                        },
-                    )
-                } else {
-                    pok(
-                        x,
-                        PState {
-                            input: xs,
-                            location: self.location.advance_col(),
-                            consumption: Consumption::Consuming,
-                        },
-                    )
-                }
-            }
-        }
-    }
-
-    #[inline]
-    pub fn has_consumed(&self) -> bool {
-        match self.consumption {
-            Consumption::Consuming => true,
-            Consumption::NonConsuming => false,
-        }
-    }
-
-    #[inline]
-    pub fn has_not_consumed(&self) -> bool {
-        match self.consumption {
-            Consumption::Consuming => false,
-            Consumption::NonConsuming => true,
-        }
-    }
-
-    pub fn set_consumption(self, consumption: Consumption) -> Self {
-        PState {
-            input: self.input,
-            location: self.location,
-            consumption,
-        }
-    }
-
-    #[inline]
-    pub fn set_consuming(self) -> Self {
-        PState {
-            input: self.input,
-            location: self.location,
-            consumption: Consumption::Consuming,
-        }
-    }
-
-    #[inline]
-    pub fn set_nonconsuming(self) -> Self {
-        PState {
-            input: self.input,
-            location: self.location,
-            consumption: Consumption::NonConsuming,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum ErrorItem<Item> {
-    Tokens(Vec<Item>),
-    Token(Item),
-    Branches(Vec<ErrorItem<Item>>),
-    Label(String),
-    Custom(String),
-    EOF,
-}
-
-impl<Item> ErrorItem<Item> {
-    pub fn merge(self, e2: Self) -> Self {
-        if let ErrorItem::Branches(mut branches) = self {
-            match e2 {
-                ErrorItem::Branches(mut b) => branches.append(&mut b),
-                e => branches.push(e),
-            }
-            ErrorItem::Branches(branches)
-        } else if let ErrorItem::Branches(mut branches) = e2 {
-            branches.push(self);
-            ErrorItem::Branches(branches)
-        } else {
-            ErrorItem::Branches(vec![self, e2])
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum Consumption {
-    Consuming,
-    NonConsuming,
-}
-
-impl Consumption {
-    #[inline]
-    pub fn merge(self, b: Consumption) -> Self {
-        match self {
-            Consumption::Consuming => Consumption::Consuming,
-            _ => b,
-        }
-    }
-
-    #[inline]
-    pub fn is_consuming(self) -> bool {
-        match self {
-            Consumption::Consuming => true,
-            Consumption::NonConsuming => false,
-        }
-    }
-
-    #[inline]
-    pub fn is_nonconsuming(self) -> bool {
-        match self {
-            Consumption::Consuming => false,
-            Consumption::NonConsuming => true,
-        }
-    }
-}
-
-type PSuccess<'input, S, T> = (T, PState<'input, S>);
-
-#[derive(Debug)]
-pub struct PFailure<'input, Item> {
-    pub location: SourceLoc<'input>,
-    pub unexpected: Option<ErrorItem<Item>>,
-    pub consumption: Consumption,
-    pub expected: Vec<ErrorItem<Item>>,
-}
-
-pub type PResult<'input, S, T> =
-    Result<PSuccess<'input, S, T>, PFailure<'input, <S as Stream>::Item>>;
-
-#[inline]
-pub fn pok<S: Stream, T>(output: T, state: PState<'_, S>) -> PResult<'_, S, T> {
-    Ok((output, state))
-}
-
-#[inline]
-pub fn perr<S: Stream, T>(
-    location: SourceLoc<'_>,
-    consumption: Consumption,
-    unexpected: Option<ErrorItem<S::Item>>,
-    expected: Vec<ErrorItem<S::Item>>,
-) -> PResult<'_, S, T> {
-    Err(PFailure {
-        location,
-        consumption,
-        unexpected,
-        expected,
-    })
-}
-
-struct SecondStage<'a, S>(PState<'a, S>);
-
-trait ParserInput<'a, S: Stream, T> {
-    fn parse(self, p: &impl Parser<'a, S, T>) -> PResult<'a, S, T>;
-}
-
-impl<'a,S: Stream,T> ParserInput<'a, S, T> for PState<'a, S> {
-    fn parse(self, p: &impl Parser<'a, S, T>) -> PResult<'a, S, T> {
-        if self.has_consumed() {
-            p.raw_parse(self).map_err(|e| PFailure {
-                location: e.location,
-                unexpected: e.unexpected,
-                consumption: Consumption::Consuming,
-                expected: e.expected,
-            })
-        } else {
-            p.raw_parse(self)
-        }
-    }
-
-}
-
-/// A general trait for parsers
-pub trait Parser<'a, S, T>
+pub trait Parser<'input, St, S, T>
 where
     S: Stream,
 {
-    /// A direct implementation intended only for parser implementations
-    /// If intended to be ran by other parsers use `.parse()`
-    /// If intended to be ran directly by the user, instead use `run_parse`
-    fn raw_parse(&self, input: PState<'a, S>) -> PResult<'a, S, T>;
+    // /// A direct implementation intended only for parser implementations
+    // /// If intended to be ran by other parsers use `.parse()`
+    // /// If intended to be ran directly by the user, instead use `run_parse`
+    fn raw_parse(&self, input: PState<'input, St, S>) -> PResult<'input, St, S, T>;
 
-    fn parse(&self, input: PState<'a, S>) -> PResult<'a, S, T> {
-        if input.has_consumed() {
-            self.raw_parse(input).map_err(|e| PFailure {
-                location: e.location,
-                unexpected: e.unexpected,
-                consumption: Consumption::Consuming,
-                expected: e.expected,
-            })
-        } else {
-            self.raw_parse(input)
-        }
+    #[inline]
+    fn parse(
+        &self,
+        input: impl ParserState<'input, St, S>,
+    ) -> SecondStagePResult<'input, St, S, T> {
+        input.parse(self)
+    }
+
+    #[inline]
+    fn parse_end(&self, input: impl ParserState<'input, St, S>) -> PResult<'input, St, S, T> {
+        input.parse(self).to_first_stage()
     }
 
     /// A wrapper around `parse` for user-level parsing
     #[inline]
-    fn run_parser(&self, file_name: &'a str, input: S) -> Result<T, PFailure<'a, S::Item>> {
-        match self.raw_parse(PState::new(file_name, input)) {
+    fn run_parser(
+        &self,
+        file_name: &'input str,
+        user_state: St,
+        input: S,
+    ) -> Result<T, PFailure<'input, S::Item>> {
+        match self.raw_parse(PState::new(file_name, input, user_state)) {
             Ok((x, _)) => Ok(x),
             Err(e) => Err(e),
         }
@@ -297,41 +49,63 @@ where
 
     /// Directly runs `self` against `input` and pretty prints the error
     #[inline]
-    fn test_parse(&self, input: S)
+    fn test_parse(&self, user_state: St, input: S)
     where
         S::Item: Debug,
         T: Debug,
     {
-        match self.run_parser("<TEST>", input) {
+        match self.run_parser("<TEST>", user_state, input) {
             Ok(x) => println!("{:#?}", x),
             Err(e) => println!("{:?}", e),
         }
     }
 
-    /// Adds an `expected <name>` error message when the parser fails
-    /// Intended to bring more readable parser errors to your parser
     #[inline]
-    fn label<Str: ToString>(self, name: Str) -> impl Parser<'a, S, T>
+    fn map_err<F>(&self, f: F) -> impl Parser<'input, St, S, T>
     where
-        Self: Sized,
+        F: Fn(PFailure<'input, S::Item>) -> PFailure<'input, S::Item>,
     {
-        move |input| match self.raw_parse(input) {
-            Ok((output, state)) => pok(output, state),
-
-            Err(PFailure {
-                location,
-                consumption,
-                unexpected,
-                mut expected,
-            }) => {
-                expected.push(ErrorItem::Label(name.to_string()));
-                perr(location, consumption, unexpected, expected)
-            }
+        move |input| match self.parse(input) {
+            Ok((x, s)) => pok(x, s),
+            Err(e) => Err(f(e)),
         }
     }
 
     #[inline]
-    fn set_consumption(&self, consumption: Consumption) -> impl Parser<'a, S, T> {
+    fn bind_err<F>(&self, f: F) -> impl Parser<'input, St, S, T>
+    where
+        F: Fn(PFailure<'input, S::Item>) -> PResult<'input, St, S, T>,
+    {
+        move |input| match self.parse(input) {
+            Ok((x, s)) => pok(x, s),
+            Err(e) => f(e),
+        }
+    }
+
+    #[inline]
+    /// Adds an `expected <name>` error message when the parser fails
+    /// Intended to bring more readable parser errors to your parser
+    fn label<Str: ToString>(&self, name: Str) -> impl Parser<'input, St, S, T> {
+        self.map_err(
+            move |PFailure {
+                      location,
+                      unexpected,
+                      consumption,
+                      mut expected,
+                  }| {
+                expected.push(ErrorItem::Label(name.to_string()));
+                PFailure {
+                    location,
+                    consumption,
+                    unexpected,
+                    expected,
+                }
+            },
+        )
+    }
+
+    #[inline]
+    fn set_consumption(&self, consumption: Consumption) -> impl Parser<'input, St, S, T> {
         move |input| match self.raw_parse(input) {
             Ok((output, state)) => pok(output, state.set_consumption(consumption)),
             Err(PFailure {
@@ -344,96 +118,55 @@ where
     }
 
     #[inline]
-    fn set_consuming(&self) -> impl Parser<'a, S, T> {
-        move |input| match self.raw_parse(input) {
-            Ok((output, state)) => pok(output, state.set_consuming()),
-            Err(PFailure {
-                location,
-                consumption: _,
-                unexpected,
-                expected,
-            }) => perr(location, Consumption::Consuming, unexpected, expected),
-        }
+    fn set_consuming(&self) -> impl Parser<'input, St, S, T> {
+        self.set_consumption(Consumption::Consuming)
     }
 
     #[inline]
-    fn pass_expectations(&self, expectations: Vec<ErrorItem<S::Item>>) -> impl Parser<'a, S, T>
-    where
-        S::Item: Clone,
-    {
-        move |input| match self.raw_parse(input) {
-            Ok(x) => Ok(x),
-            Err(PFailure {
-                location,
-                unexpected,
-                consumption,
-                mut expected,
-            }) => {
-                let mut expectations = expectations.clone();
-                expectations.append(&mut expected);
-                perr(location, consumption, unexpected, expected)
-            }
-        }
-    }
-
-    #[inline]
-    fn replace_expectations(&self, expectations: Vec<ErrorItem<S::Item>>) -> impl Parser<'a, S, T>
-    where
-        S::Item: Clone,
-    {
-        move |input| match self.raw_parse(input) {
-            Ok(x) => Ok(x),
-            Err(PFailure {
-                location,
-                unexpected,
-                consumption,
-                expected: _,
-            }) => perr(location, consumption, unexpected, expectations.clone()),
-        }
+    fn set_nonconsuming(&self) -> impl Parser<'input, St, S, T> {
+        self.set_consumption(Consumption::NonConsuming)
     }
 
     /// Maps over the result of `self`. This does not change the amount of input consumed
     #[inline]
-    fn map<F, B>(&self, f: F) -> impl Parser<'a, S, B>
+    fn map<F, B>(&self, f: F) -> impl Parser<'input, St, S, B>
     where
         F: Fn(T) -> B,
     {
         move |input| match self.raw_parse(input) {
             Ok((output, state)) => pok(f(output), state),
-            Err(PFailure {
-                location,
-                consumption,
-                unexpected,
-                expected,
-            }) => perr(location, consumption, unexpected, expected),
+            Err(e) => Err(e),
         }
     }
 
     /// Parses `self` without consuming any input
     #[inline]
-    fn lookahead(&self) -> impl Parser<'a, S, T> {
-        move |input| {
-            let (x, _) = self.raw_parse(input)?;
-            pok(x, input.set_nonconsuming())
+    fn lookahead(&self) -> impl Parser<'input, St, S, T>
+    where
+        St: Clone,
+    {
+        move |s: PState<'input, St, S>| {
+            let (x, _) = self.parse(s.clone())?;
+            pok(x, s.set_nonconsuming())
         }
     }
 
     /// Fails if the parser doesn't parse until EOF
     #[inline]
-    fn exhaustive(&self) -> impl Parser<'a, S, T> {
+    fn exhaustive(&self) -> impl Parser<'input, St, S, T> {
         move |input| {
-            let (x, s) = self.raw_parse(input)?;
-            let (_, s) = eof(s)?;
+            let (x, s) = self.parse(input)?;
+            let (_, s) = eof.parse(s)?;
             pok(x, s)
         }
     }
 
     /// Creates a new parser based on previous input and makes it parse
     #[inline]
-    fn bind<B, P, F>(&self, f: F) -> impl Parser<'a, S, B>
+    fn bind<B, P, F>(&self, f: F) -> impl Parser<'input, St, S, B>
     where
         F: Fn(T) -> P,
-        P: Parser<'a, S, B>,
+        P: Parser<'input, St, S, B>,
     {
         move |input| {
             let (x, s) = self.raw_parse(input)?;
@@ -447,38 +180,59 @@ where
 
     #[inline]
     /// Replaces parser output
-    fn replace<U: Clone>(&self, x: U) -> impl Parser<'a, S, U> {
+    fn replace<U: Clone>(&self, x: U) -> impl Parser<'input, St, S, U> {
         move |input| {
-            let (_, s) = self.raw_parse(input)?;
+            let (_, s) = self.parse(input)?;
             pok(x.clone(), s)
         }
     }
 
     #[inline]
     /// Ignores parser output
-    fn ignore(&self) -> impl Parser<'a, S, ()> {
+    fn ignore(&self) -> impl Parser<'input, St, S, ()> {
         self.replace(())
     }
 }
 
-/// Creates a parser that doesn't consume input and always returns what was passed to it
+impl<'a, St, S, T, F> Parser<'a, St, S, T> for F
+where
+    F: Fn(PState<'a, St, S>) -> PResult<'a, St, S, T>,
+    S: Stream,
+{
+    fn raw_parse(&self, state: PState<'a, St, S>) -> PResult<'a, St, S, T> {
+        self(state)
+    }
+}
+
+impl<'a, St, S, T, P> Parser<'a, St, S, T> for Rc<P>
+where
+    P: Parser<'a, St, S, T>,
+    S: Stream,
+{
+    fn raw_parse(&self, state: PState<'a, St, S>) -> PResult<'a, St, S, T> {
+        let x: &P = self.borrow();
+        x.raw_parse(state)
+    }
+}
+
 #[inline]
-pub fn pure<'a, S, T>(val: T) -> impl Parser<'a, S, T>
+/// Creates a parser that doesn't consume input and always returns what was passed to it
+pub fn pure<'a, St, S, T>(val: T) -> impl Parser<'a, St, S, T>
 where
     S: Stream,
     T: Clone,
 {
-    move |input: PState<'a, S>| pok(val.clone(), input.set_nonconsuming())
+    move |input: PState<'a, St, S>| pok(val.clone(), input.set_nonconsuming())
 }
 
-/// Creates a parser that always fails with a chosen error message
 #[inline]
-pub fn fail<'a, Str, S, T>(message: Str) -> impl Parser<'a, S, T>
+/// Creates a parser that always fails with a chosen error message
+pub fn fail<'a, Str, St, S, T>(message: Str) -> impl Parser<'a, St, S, T>
 where
     S: Stream,
     Str: ToString,
 {
-    move |input: PState<'a, S>| {
+    move |input: PState<'a, St, S>| {
         perr(
             input.location,
             Consumption::NonConsuming,
@@ -490,7 +244,7 @@ where
 
 #[inline]
 /// A parser that always fails
-pub fn empty<S, T>(input: PState<'_, S>) -> PResult<'_, S, T>
+pub fn empty<St, S, T>(input: PState<'_, St, S>) -> PResult<'_, St, S, T>
 where
     S: Stream,
 {
@@ -499,7 +253,7 @@ where
 
 /// Only parses succesfully when at the end of input.
 #[inline]
-pub fn eof<S>(state: PState<'_, S>) -> PResult<'_, S, ()>
+pub fn eof<St, S>(state: PState<'_, St, S>) -> PResult<'_, St, S, ()>
 where
     S: Stream,
 {
@@ -515,13 +269,13 @@ where
 }
 
 #[inline]
-pub fn satisfy_map<'a, S, F, P, T>(f: F, is_newline: P) -> impl Parser<'a, S, T>
+pub fn satisfy_map<'a, St, S, F, P, T>(f: F, is_newline: P) -> impl Parser<'a, St, S, T>
 where
     S: Stream,
     P: Fn(&S::Item) -> bool,
     F: Fn(&S::Item) -> Option<T>,
 {
-    move |input: PState<'a, S>| {
+    move |input: PState<'a, St, S>| {
         let (x, s) = input.uncons(&is_newline)?;
         match f(&x) {
             Some(x) => pok(x, s),
@@ -536,12 +290,12 @@ where
 }
 
 #[inline]
-pub fn satisfy_eq<'a, S>(x: S::Item, is_newline: bool) -> impl Parser<'a, S, S::Item>
+pub fn satisfy_eq<'a, St, S>(x: S::Item, is_newline: bool) -> impl Parser<'a, St, S, S::Item>
 where
     S: Stream,
     S::Item: PartialEq + Clone,
 {
-    move |input: PState<'a, S>| {
+    move |input: PState<'a, St, S>| {
         let (y, s) = input.uncons(|_| is_newline)?;
         if x.clone() == y {
             pok(y, s)
@@ -557,44 +311,24 @@ where
 }
 
 #[inline]
-pub fn satisfy<'a, S, F, P>(f: F, is_newline: P) -> impl Parser<'a, S, S::Item>
+pub fn satisfy<'a, St, S, F, P>(f: F, is_newline: P) -> impl Parser<'a, St, S, S::Item>
 where
     S: Stream,
     P: Fn(&S::Item) -> bool,
     F: Fn(&S::Item) -> bool,
 {
-    move |input: PState<'a, S>| {
+    move |input: PState<'a, St, S>| {
+        let loc = input.location;
         let (x, s) = input.uncons(&is_newline)?;
         if f(&x) {
             pok(x, s)
         } else {
             perr(
-                input.location,
+                loc,
                 Consumption::NonConsuming,
                 Some(ErrorItem::Token(x)),
                 vec![],
             )
         }
-    }
-}
-
-impl<'a, S, T, F> Parser<'a, S, T> for F
-where
-    F: Fn(PState<'a, S>) -> PResult<'a, S, T>,
-    S: Stream,
-{
-    fn raw_parse(&self, state: PState<'a, S>) -> PResult<'a, S, T> {
-        self(state)
-    }
-}
-
-impl<'a, S, T, P> Parser<'a, S, T> for Rc<P>
-where
-    P: Parser<'a, S, T>,
-    S: Stream,
-{
-    fn raw_parse(&self, state: PState<'a, S>) -> PResult<'a, S, T> {
-        let x: &P = self.borrow();
-        x.raw_parse(state)
     }
 }

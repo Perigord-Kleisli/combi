@@ -1,12 +1,16 @@
+use std::ops::RangeBounds;
+
 use crate::{
     choice,
     combinators::{branching::Branching, repeating::Repeating, sequential::Sequential},
-    parser::{self, perr, pok, Consumption, ErrorItem, PFailure, PResult, PState, Parser},
+    error::ErrorItem,
+    parser::{self, Parser},
+    state::{perr, pok, Consumption, PResult, PState, ParserResult, SecondStagePResult},
     stream::Stream,
 };
 
 #[inline]
-fn uncons_char_stream<S>(input: PState<'_, S>) -> PResult<'_, S, char>
+fn uncons_char_stream<S>(input: PState<'_, S>) -> SecondStagePResult<'_, S, char>
 where
     S: Stream<Item = char>,
 {
@@ -46,7 +50,7 @@ pub fn any_single<S>(input: PState<'_, S>) -> PResult<'_, S, char>
 where
     S: Stream<Item = char>,
 {
-    uncons_char_stream(input)
+    uncons_char_stream(input).to_first_stage()
 }
 
 /// Parses any single character in `s`
@@ -215,7 +219,10 @@ pub fn symbol(s: &str) -> impl Parser<'_, &'_ str, &'_ str> {
 }
 
 pub fn eol<'input>(input: PState<'input, &'input str>) -> PResult<'input, &'input str, ()> {
-    char('\n').ignore().or(string("\r\n").ignore()).raw_parse(input)
+    char('\n')
+        .ignore()
+        .or(string("\r\n").ignore())
+        .raw_parse(input)
 }
 
 /// Parses an integer, possibly negative or not
@@ -227,7 +234,7 @@ where
         let (x, state) = char('-').optional().raw_parse(state)?;
         let neg = x.is_some();
 
-        let (x, state) = ascii_digit.many1().raw_parse(state)?;
+        let (x, state) = ascii_digit.some().raw_parse(state)?;
 
         let mut n: i64 = 0;
         for (p, c) in x.iter().rev().enumerate() {
@@ -252,7 +259,7 @@ where
         let (x, state) = char('-').optional().raw_parse(state)?;
         let neg = x.is_some();
 
-        let (x, state) = ascii_digit.or(char('.')).many1().raw_parse(state)?;
+        let (x, state) = ascii_digit.or(char('.')).some().raw_parse(state)?;
 
         let mut n: f64 = x.into_iter().collect::<String>().parse().unwrap();
 
@@ -279,19 +286,19 @@ where
 {
     let (x, input) = any_single.raw_parse(input)?;
     match x {
-        'n' => Ok(('\n',  input.set_consuming())),
-        'r' => Ok(('\r',  input.set_consuming())),
-        't' => Ok(('\t',  input.set_consuming())),
+        'n' => Ok(('\n', input.set_consuming())),
+        'r' => Ok(('\r', input.set_consuming())),
+        't' => Ok(('\t', input.set_consuming())),
         '\\' => Ok(('\\', input.set_consuming())),
         '\'' => Ok(('\'', input.set_consuming())),
         '\"' => Ok(('\"', input.set_consuming())),
         '\0' => Ok(('\0', input.set_consuming())),
-        c => Err(PFailure {
-            location: input.location,
-            unexpected: Some(ErrorItem::Token(c)),
-            consumption: Consumption::NonConsuming,
-            expected: vec![],
-        }),
+        c => perr(
+            input.location,
+            Consumption::NonConsuming,
+            Some(ErrorItem::Token(c)),
+            vec![],
+        ),
     }
 }
 
@@ -303,12 +310,12 @@ where
     match x {
         'o' | 'O' => Ok((8, input.set_consuming())),
         'x' | 'X' => Ok((16, input.set_consuming())),
-        c => Err(PFailure {
-            location: input.location,
-            unexpected: Some(ErrorItem::Token(c)),
-            consumption: Consumption::NonConsuming,
-            expected: vec![],
-        }),
+        c => perr(
+            input.location,
+            Consumption::NonConsuming,
+            Some(ErrorItem::Token(c)),
+            vec![],
+        ),
     }
 }
 
@@ -316,7 +323,7 @@ fn lex_digits<'a, S>(base: u32) -> impl Parser<'a, S, Vec<u32>>
 where
     S: Stream<Item = char>,
 {
-    move |input: PState<'a, S>| char_map(|c| c.to_digit(base)).many1().raw_parse(input)
+    move |input: PState<'a, S>| char_map(|c| c.to_digit(base)).some().raw_parse(input)
 }
 
 pub fn lex_integer<'a, S>(base: u32) -> impl Parser<'a, S, u32>
@@ -338,22 +345,62 @@ where
     let (n, input) = lex_integer(base).raw_parse(input)?;
     match char::from_u32(n) {
         Some(n) => Ok((n, input.set_consuming())),
-        None => Err(PFailure {
-            location: input.location,
-            unexpected: Some(ErrorItem::Tokens(n.to_string().chars().collect())),
-            consumption: input.consumption,
-            expected: vec![],
-        }),
+        None => perr(
+            input.location,
+            input.consumption,
+            Some(ErrorItem::Tokens(n.to_string().chars().collect())),
+            vec![],
+        ),
     }
 }
+
+pub fn range<'input, S, Range: RangeBounds<char>>(range: Range) -> impl Parser<'input, S, char>
+where
+    S: Stream<Item = char>,
+{
+    move |input| {
+        let (c, input) = uncons_char_stream(input)?;
+        if range.contains(&c) {
+            pok(c, input)
+        } else {
+            perr(
+                input.location,
+                Consumption::NonConsuming,
+                Some(ErrorItem::Token(c)),
+                vec![],
+            )
+        }
+    }
+}
+
+pub fn not_range<'input, S, Range: RangeBounds<char>>(range: Range) -> impl Parser<'input, S, char>
+where
+    S: Stream<Item = char>,
+{
+    move |input| {
+        let (c, input) = uncons_char_stream(input)?;
+        if !range.contains(&c) {
+            pok(c, input)
+        } else {
+            perr(
+                input.location,
+                Consumption::NonConsuming,
+                Some(ErrorItem::Token(c)),
+                vec![],
+            )
+        }
+    }
+}
+
 fn lex_char_e<S>(input: PState<'_, S>) -> PResult<'_, S, (char, bool)>
 where
     S: Stream<Item = char>,
 {
     let (x, input) = any_single.raw_parse(input)?;
     if x == '\\' {
-        let (x, input) =
-            choice![lex_esc_char.attempt(), lex_numeric].set_consuming().raw_parse(input)?;
+        let (x, input) = choice![lex_esc_char.attempt(), lex_numeric]
+            .set_consuming()
+            .raw_parse(input)?;
         Ok(((x, true), input.set_consuming()))
     } else {
         Ok(((x, false), input.set_consuming()))
@@ -372,99 +419,166 @@ where
     .raw_parse(input)
 }
 
-// /// Regex character classes
-// pub mod class {
-//     use crate::{
-//         defs::{PResult, PState, Reason, Stream},
-//         parsers::char::any_single,
-//     };
-//
-//     pub fn word<S>(input: PState<'_, S>) -> PResult<'_, S, char>
-//     where
-//         S: Stream<Item = char>,
-//     {
-//         let (x, input) = any_single(input)?;
-//         if x.is_alphanumeric() || x == '_' {
-//             Ok((x, input))
-//         } else {
-//             Err((input.location, Reason::expecteds("word character")))
-//         }
-//     }
-//     pub fn not_word<S>(input: PState<'_, S>) -> PResult<'_, S, char>
-//     where
-//         S: Stream<Item = char>,
-//     {
-//         let (x, input) = any_single(input)?;
-//         if !x.is_alphanumeric() && x != '_' {
-//             Ok((x, input))
-//         } else {
-//             Err((input.location, Reason::expecteds("not word character")))
-//         }
-//     }
-//
-//     pub fn digit<S>(input: PState<'_, S>) -> PResult<'_, S, char>
-//     where
-//         S: Stream<Item = char>,
-//     {
-//         let (x, input) = any_single(input)?;
-//         if x.is_ascii_digit() {
-//             Ok((x, input))
-//         } else {
-//             Err((input.location, Reason::expecteds("digit character")))
-//         }
-//     }
-//
-//     pub fn not_digit<S>(input: PState<'_, S>) -> PResult<'_, S, char>
-//     where
-//         S: Stream<Item = char>,
-//     {
-//         let (x, input) = any_single(input)?;
-//         if !x.is_ascii_digit() {
-//             Ok((x, input))
-//         } else {
-//             Err((input.location, Reason::expecteds("digit character")))
-//         }
-//     }
-//
-//     pub fn space<S>(input: PState<'_, S>) -> PResult<'_, S, char>
-//     where
-//         S: Stream<Item = char>,
-//     {
-//         let (x, input) = any_single(input)?;
-//         if x.is_whitespace() {
-//             Ok((x, input))
-//         } else {
-//             Err((input.location, Reason::expecteds("digit character")))
-//         }
-//     }
-//
-//     pub fn not_space<S>(input: PState<'_, S>) -> PResult<'_, S, char>
-//     where
-//         S: Stream<Item = char>,
-//     {
-//         let (x, input) = any_single(input)?;
-//         if !x.is_whitespace() {
-//             Ok((x, input))
-//         } else {
-//             Err((input.location, Reason::expecteds("digit character")))
-//         }
-//     }
-//
-//     pub fn word_boundary<S>(input: PState<'_, S>) -> PResult<'_, S, char>
-//     where
-//         S: Stream<Item = char>,
-//     {
-//         let (x, input) = word(input)?;
-//         let (_, _) = not_word(input)?;
-//         Ok((x, input))
-//     }
-//
-//     pub fn not_word_boundary<S>(input: PState<'_, S>) -> PResult<'_, S, char>
-//     where
-//         S: Stream<Item = char>,
-//     {
-//         let (_, input) = not_word(input)?;
-//         let (x, input) = word(input)?;
-//         Ok((x, input))
-//     }
-// }
+pub fn any_with_escapes<S>(s: &str) -> impl Parser<'_, S, char>
+where
+    S: Stream<Item = char>,
+{
+    move |input| {
+        let (x, input) = none_of(s).parse(input)?;
+        if x == '\\' {
+            let (x, input) = any_single.parse(input)?;
+            match x {
+                'n' => pok('\n', input),
+                'r' => pok('\r', input),
+                't' => pok('\t', input),
+                '\\' => pok('\\', input),
+                '\'' => pok('\'', input),
+                '\"' => pok('\"', input),
+                '\0' => pok('\0', input),
+                x => {
+                    if s.contains(x) {
+                        pok(x, input)
+                    } else {
+                        perr(
+                            input.location,
+                            Consumption::Consuming,
+                            Some(ErrorItem::Token(x)),
+                            vec![],
+                        )
+                    }
+                }
+            }
+        } else {
+            pok(x, input)
+        }
+    }
+}
+
+/// Regex character classes
+pub mod class {
+    use crate::{
+        error::ErrorItem,
+        parser::{Parser, Stream},
+        parsers::char::any_single,
+        state::{perr, pok, Consumption, PResult, PState},
+    };
+
+    pub fn word<S>(input: PState<'_, S>) -> PResult<'_, S, char>
+    where
+        S: Stream<Item = char>,
+    {
+        let (x, input) = any_single.parse(input)?;
+        if x.is_alphanumeric() || x == '_' {
+            pok(x, input)
+        } else {
+            perr(
+                input.location,
+                Consumption::NonConsuming,
+                Some(ErrorItem::Token(x)),
+                vec![],
+            )
+        }
+    }
+    pub fn not_word<S>(input: PState<'_, S>) -> PResult<'_, S, char>
+    where
+        S: Stream<Item = char>,
+    {
+        let (x, input) = any_single.parse(input)?;
+        if !x.is_alphanumeric() && x != '_' {
+            pok(x, input)
+        } else {
+            perr(
+                input.location,
+                Consumption::NonConsuming,
+                Some(ErrorItem::Token(x)),
+                vec![],
+            )
+        }
+    }
+
+    pub fn digit<S>(input: PState<'_, S>) -> PResult<'_, S, char>
+    where
+        S: Stream<Item = char>,
+    {
+        let (x, input) = any_single.parse(input)?;
+        if x.is_ascii_digit() {
+            pok(x, input)
+        } else {
+            perr(
+                input.location,
+                Consumption::NonConsuming,
+                Some(ErrorItem::Token(x)),
+                vec![],
+            )
+        }
+    }
+
+    pub fn not_digit<S>(input: PState<'_, S>) -> PResult<'_, S, char>
+    where
+        S: Stream<Item = char>,
+    {
+        let (x, input) = any_single.parse(input)?;
+        if !x.is_ascii_digit() {
+            pok(x, input)
+        } else {
+            perr(
+                input.location,
+                Consumption::NonConsuming,
+                Some(ErrorItem::Token(x)),
+                vec![],
+            )
+        }
+    }
+
+    pub fn space<S>(input: PState<'_, S>) -> PResult<'_, S, char>
+    where
+        S: Stream<Item = char>,
+    {
+        let (x, input) = any_single.parse(input)?;
+        if x.is_whitespace() {
+            pok(x, input)
+        } else {
+            perr(
+                input.location,
+                Consumption::NonConsuming,
+                Some(ErrorItem::Token(x)),
+                vec![],
+            )
+        }
+    }
+
+    pub fn not_space<S>(input: PState<'_, S>) -> PResult<'_, S, char>
+    where
+        S: Stream<Item = char>,
+    {
+        let (x, input) = any_single.parse(input)?;
+        if !x.is_whitespace() {
+            pok(x, input)
+        } else {
+            perr(
+                input.location,
+                Consumption::NonConsuming,
+                Some(ErrorItem::Token(x)),
+                vec![],
+            )
+        }
+    }
+
+    pub fn word_boundary<S>(input: PState<'_, S>) -> PResult<'_, S, char>
+    where
+        S: Stream<Item = char>,
+    {
+        let (x, input) = word.parse(input)?;
+        let (_, _) = not_word.parse(input)?;
+        pok(x, input)
+    }
+
+    pub fn not_word_boundary<S>(input: PState<'_, S>) -> PResult<'_, S, char>
+    where
+        S: Stream<Item = char>,
+    {
+        let (_, input) = not_word.parse(input)?;
+        let (x, input) = word.parse(input)?;
+        pok(x, input)
+    }
+}

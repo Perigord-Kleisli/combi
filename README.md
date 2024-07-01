@@ -61,10 +61,11 @@ VAL%idmail_2@email.com
 ```
 
 # TODO
-- [x] Add a difference between Errors that consume input vs those that don't, and generally improving parser errors.
-- [ ] Rust-style parser error message pretty printing 
-- [ ] Regex parser macro
-- [ ] Fix example programs and still unedited modules
+<<<<<<< HEAD
+- [x] Add a difference between Errors that consume input vs those that don't
+- [ ] Error message prettifier
+- [ ] Indentation parsers
+- [ ] Add more example programs
 - [ ] Add ability to add custom errors
 - [ ] Add unit tests
 - [ ] Documentation
