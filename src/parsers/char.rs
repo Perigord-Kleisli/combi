@@ -117,40 +117,29 @@ where
 }
 
 /// Parses a sequence of characters provided by `s`
-pub fn string<'input, St>(s: &'input str) -> impl Parser<'input, St, &'input str, &'input str> {
-    move |input: PState<'input, St, &'input str>| {
-        if let Some(s2) = input.input.get(..s.len()) {
-            if s == s2 {
-                let location = s.chars().fold(input.location, |accum, x| {
-                    if x == '\n' {
-                        accum.advance_line()
-                    } else {
-                        accum.advance_col()
-                    }
-                });
-
-                pok(
-                    s2,
-                    PState {
-                        input: &input.input[s.len()..],
-                        location,
-                        consumption: Consumption::Consuming,
-                        user_state: input.user_state,
-                    },
-                )
-            } else {
-                perr(
-                    input.location,
-                    Consumption::NonConsuming,
-                    Some(ErrorItem::Tokens(s2.chars().collect())),
-                    vec![ErrorItem::Tokens(s.chars().collect())],
-                )
-            }
+pub fn string<'input, St, S: Stream<Item = char>>(s: &'input str) -> impl Parser<'input, St, S, S> {
+    move |input: PState<'input, St, S>| {
+        // HACK: since there is no notion of emptiness in strings, passing an empty str results in
+        // a parser that always fails
+        if s.is_empty() {
+            return perr(
+                input.location,
+                Consumption::NonConsuming,
+                None,
+                vec![ErrorItem::Custom(String::from("Parsing empty string"))],
+            );
+        }
+        let (s2, input) = input.split(s.len().try_into().unwrap(), |c| *c == '\n')?;
+        if s.chars()
+            .zip(s2.iter())
+            .fold(true, |x, (c1, c2)| x && c1 == c2)
+        {
+            pok(s2, input)
         } else {
             perr(
                 input.location,
                 Consumption::NonConsuming,
-                Some(ErrorItem::EOF),
+                Some(ErrorItem::Tokens(s2.iter().collect())),
                 vec![ErrorItem::Tokens(s.chars().collect())],
             )
         }
@@ -224,11 +213,12 @@ where
 }
 
 /// parses a string `s` and the whitespace after it
-pub fn symbol<St>(s: &str) -> impl Parser<'_, St, &'_ str, &'_ str>
+pub fn symbol<S, St>(s: &str) -> impl Parser<'_, St, S, S>
 where
     St: Clone,
+    S: Stream<Item = char>,
 {
-    move |input| string(s).lexeme().raw_parse(input)
+    move |input| string(s).lexeme().parse_end(input)
 }
 
 pub fn eol<'input, St>(
@@ -240,7 +230,7 @@ where
     char('\n')
         .ignore()
         .or(string("\r\n").ignore())
-        .raw_parse(input)
+        .parse_end(input)
 }
 
 /// Parses an integer, possibly negative or not

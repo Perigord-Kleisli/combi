@@ -3,7 +3,7 @@ use crate::{
     parser::Parser,
     stream::Stream,
 };
-use std::path::Path;
+use std::{num::NonZeroUsize, path::Path};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SourceLoc<'file> {
@@ -291,6 +291,42 @@ impl<'input, S: Stream, St> PState<'input, St, S> {
         }
     }
 
+    pub fn split<P>(self, n: NonZeroUsize, is_newline: P) -> SecondStagePResult<'input, St, S, S>
+    where
+        P: Fn(&S::Item) -> bool,
+    {
+        match self.input.split(n.into()) {
+            None => perr(
+                self.location.advance_col(),
+                Consumption::NonConsuming,
+                Some(ErrorItem::EOF),
+                vec![],
+            )
+            .to_second_stage(),
+            Some((l, r)) => {
+                let mut new_loc = self.location;
+                for i in l.iter() {
+                    if is_newline(&i) {
+                        new_loc = new_loc.advance_line();
+                    } else {
+                        new_loc = new_loc.advance_col();
+                    }
+                }
+
+                pok(
+                    l,
+                    PState {
+                        input: r,
+                        location: new_loc,
+                        consumption: Consumption::Consuming,
+                        user_state: self.user_state,
+                    },
+                )
+                .to_second_stage()
+            }
+        }
+    }
+
     #[inline]
     pub fn has_consumed(&self) -> bool {
         match self.consumption {
@@ -375,6 +411,42 @@ impl<'input, S: Stream, St> SecondStagePState<'input, St, S> {
                     )
                     .to_second_stage()
                 }
+            }
+        }
+    }
+
+    pub fn split<P>(self, n: NonZeroUsize, is_newline: P) -> SecondStagePResult<'input, St, S, S>
+    where
+        P: Fn(&S::Item) -> bool,
+    {
+        match self.input.split(n.into()) {
+            None => perr(
+                self.location.advance_col(),
+                Consumption::NonConsuming,
+                Some(ErrorItem::EOF),
+                vec![],
+            )
+            .to_second_stage(),
+            Some((l, r)) => {
+                let mut new_loc = self.location;
+                for i in l.iter() {
+                    if is_newline(&i) {
+                        new_loc = new_loc.advance_line();
+                    } else {
+                        new_loc = new_loc.advance_col();
+                    }
+                }
+
+                pok(
+                    l,
+                    PState {
+                        input: r,
+                        location: new_loc,
+                        consumption: Consumption::Consuming,
+                        user_state: self.user_state,
+                    },
+                )
+                .to_second_stage()
             }
         }
     }

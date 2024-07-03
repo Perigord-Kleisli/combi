@@ -15,6 +15,9 @@
 ///     }
 /// }
 /// ```
+
+pub struct StreamIter<T: Stream>(T);
+
 pub trait Stream: Copy {
     type Item;
 
@@ -28,6 +31,10 @@ pub trait Stream: Copy {
     /// }
     /// ```
     fn split(self, n: usize) -> Option<(Self, Self)>;
+
+    fn iter(self) -> StreamIter<Self> {
+        StreamIter(self)
+    }
 }
 
 impl Stream for &str {
@@ -53,5 +60,16 @@ impl<T: Copy> Stream for &[T] {
 
     fn split(self, n: usize) -> Option<(Self, Self)> {
         Some((self.get(0..n)?, self.get(n..)?))
+    }
+
+}
+
+impl<Item, S: Stream<Item = Item>> Iterator for StreamIter<S> {
+    type Item = Item;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (x,xs) = self.0.uncons()?;
+        *self = StreamIter(xs);
+        Some(x)
     }
 }
